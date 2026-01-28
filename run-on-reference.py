@@ -1,5 +1,5 @@
 # %%
-# %pip uninstall --yes 'keras' 'matplotlib' 'scikit-learn' 'tensorflow'
+%pip uninstall --yes 'keras' 'matplotlib' 'scikit-learn' 'tensorflow'
 
 # %%
 import warnings
@@ -82,6 +82,18 @@ from openai_harmony import (
 
 from transformers import set_seed
 import kaggle_evaluation.aimo_3_inference_server
+
+# %%
+from pathlib import Path
+import json
+import csv
+
+LOG_DIR = Path("/kaggle/working/aimo3_logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+ATTEMPTS_PATH = LOG_DIR / "attempts.jsonl"
+SOLUTIONS_PATH = LOG_DIR / "solutions.csv"
+
 
 # %%
 class CFG:
@@ -200,8 +212,60 @@ class CFG:
     temperature = 0.5
     min_p = 0.02
 
+    log_dir = str(LOG_DIR)
+    attempts_path = str(ATTEMPTS_PATH)
+    solutions_path = str(SOLUTIONS_PATH)
+
 # %%
 set_seed(CFG.seed)
+
+# %%
+class RunLogger:
+    def __init__(self, attempts_path: str, solutions_path: str):
+        self.attempts_path = attempts_path
+        self.solutions_path = solutions_path
+        self._lock = threading.Lock()
+        self._init_solutions_csv()
+
+    def _init_solutions_csv(self):
+        if os.path.exists(self.solutions_path):
+            return
+        header = [
+            "id", "pred_answer", "true_answer", "is_correct",
+            "selected_attempt", "selected_entropy",
+            "selected_raw_output"
+        ]
+        with open(self.solutions_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+
+    def log_attempts(self, attempt_records: list[dict]):
+        # JSONL: one record per attempt
+        with self._lock:
+            with open(self.attempts_path, "a", encoding="utf-8") as f:
+                for rec in attempt_records:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def log_solution_row(
+        self,
+        id_value: int,
+        pred_answer: int,
+        true_answer: Optional[int],
+        is_correct: Optional[bool],
+        selected_attempt: Optional[int],
+        selected_entropy: Optional[float],
+        selected_raw_output: str
+    ):
+        with self._lock:
+            with open(self.solutions_path, "a", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow([
+                    id_value, pred_answer, true_answer,
+                    is_correct, selected_attempt, selected_entropy,
+                    selected_raw_output
+                ])
+
+logger = RunLogger(CFG.attempts_path, CFG.solutions_path)
 
 # %%
 class AIMO3Template:
@@ -706,7 +770,7 @@ class AIMO3Solver:
         stop_event: threading.Event,
         deadline: float
     ) -> dict:
-
+    
         # Always define these so we can safely return them
         text_chunks: list[str] = []
         tool_calls: list[dict] = []
@@ -717,7 +781,7 @@ class AIMO3Solver:
         final_answer = None
         logprobs_buffer = []
         sandbox = None
-
+    
         if stop_event.is_set():
             finish_reason = "skipped_stop_event"
             return {
@@ -731,7 +795,7 @@ class AIMO3Solver:
                 "Entropy": float("inf"),
                 "Tool Calls": [],
             }
-
+    
         if time.time() > deadline:
             finish_reason = "skipped_deadline"
             return {
@@ -745,10 +809,10 @@ class AIMO3Solver:
                 "Entropy": float("inf"),
                 "Tool Calls": [],
             }
-
+    
         local_tool = None
         attempt_seed = int((self.cfg.seed + attempt_index) ** 2)
-
+    
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
             local_tool = AIMO3Tool(
@@ -756,11 +820,11 @@ class AIMO3Solver:
                 tool_prompt=self.cfg.tool_prompt,
                 sandbox=sandbox
             )
-
+    
             encoding = self.encoding
             messages = self.template.apply_chat_template(system_prompt, problem, local_tool.tool_config)
             conversation = Conversation.from_messages(messages)
-
+    
             for _turn in range(self.cfg.turns):
                 if stop_event.is_set():
                     finish_reason = "stopped_by_early_stop"
@@ -768,14 +832,14 @@ class AIMO3Solver:
                 if time.time() > deadline:
                     finish_reason = "deadline_exceeded"
                     break
-
+    
                 prompt_ids = encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
                 max_tokens = self.cfg.context_tokens - len(prompt_ids)
-
+    
                 if max_tokens < self.cfg.buffer_tokens:
                     finish_reason = "context_exhausted"
                     break
-
+    
                 stream = self.client.completions.create(
                     model=self.cfg.served_model_name,
                     temperature=self.cfg.temperature,
@@ -790,7 +854,7 @@ class AIMO3Solver:
                         "return_token_ids": True
                     }
                 )
-
+    
                 token_buffer = []
                 try:
                     for chunk in stream:
@@ -800,19 +864,19 @@ class AIMO3Solver:
                         if time.time() > deadline:
                             finish_reason = "deadline_exceeded"
                             break
-
+    
                         new_tokens = chunk.choices[0].token_ids
                         new_text = chunk.choices[0].text or ""
-
+    
                         if new_tokens:
                             token_buffer.extend(new_tokens)
                             total_tokens += len(new_tokens)
                             text_chunks.append(new_text)
-
+    
                             chunk_logprobs = chunk.choices[0].logprobs
                             if chunk_logprobs is not None and chunk_logprobs.top_logprobs:
                                 logprobs_buffer.extend(chunk_logprobs.top_logprobs)
-
+    
                         # Fast scan when '}' appears (heuristic)
                         if "}" in new_text:
                             search_text = "".join(text_chunks[-self.cfg.search_tokens:])
@@ -823,20 +887,20 @@ class AIMO3Solver:
                                 break
                 finally:
                     stream.close()
-
+    
                 if final_answer is not None:
                     break
-
+    
                 if not token_buffer:
                     # No tokens produced this turn
                     if finish_reason == "unknown":
                         finish_reason = "no_tokens"
                     break
-
+    
                 new_messages = encoding.parse_messages_from_completion_tokens(token_buffer, Role.ASSISTANT)
                 conversation.messages.extend(new_messages)
                 last_message = new_messages[-1]
-
+    
                 if last_message.channel == "final":
                     answer_text = last_message.content[0].text
                     final_answer = self._scan_for_answer(answer_text)
@@ -845,42 +909,42 @@ class AIMO3Solver:
                     else:
                         finish_reason = "final_channel_no_answer"
                     break
-
+    
                 if last_message.recipient == "python":
                     python_calls += 1
                     # Capture the code the model requested
                     raw_script = last_message.content[0].text
                     final_script = local_tool._ensure_last_print(raw_script)
-
+    
                     tool_responses = local_tool.process_sync_plus(last_message)
                     response_text = tool_responses[0].content[0].text
-
+    
                     tool_calls.append({
                         "code": final_script,
                         "output": response_text
                     })
-
+    
                     if response_text.startswith("[ERROR]") or "Traceback" in response_text or "Error:" in response_text:
                         python_errors += 1
-
+    
                     conversation.messages.extend(tool_responses)
-
+    
             if finish_reason == "unknown":
                 finish_reason = "max_turns_or_no_answer"
-
+    
         except Exception as exc:
             python_errors += 1
-            finish_reason = f"exception:{type(exc).__name__}"
-
+            finish_reason = f"exception:{type(exc).__name__}\n{exc}"
+    
         finally:
             if sandbox is not None:
                 try:
                     sandbox.reset()
                 finally:
                     self.sandbox_pool.put(sandbox)
-
+    
         mean_entropy = self._compute_mean_entropy(logprobs_buffer)
-
+    
         return {
             "Attempt": attempt_index + 1,
             "Response Length": total_tokens,
@@ -894,66 +958,51 @@ class AIMO3Solver:
         }
 
     
-    def _select_answer(self, detailed_results: list) -> int:
-
+    def _select_answer(self, detailed_results: list[dict]) -> tuple[int, Optional[int], pd.DataFrame]:
         answer_weights = defaultdict(float)
         answer_votes = defaultdict(int)
-
-        for result in detailed_results:
-            answer = result['Answer']
-            entropy = result['Entropy']
-            
-            if answer is not None:
-                weight = 1.0 / max(entropy, 1e-9)
-                
-                answer_weights[answer] += weight
-                answer_votes[answer] += 1
-
-        scored_answers = []
-
-        for answer, total_weight in answer_weights.items():
-            scored_answers.append({
-                'answer': answer, 
-                'votes': answer_votes[answer], 
-                'score': total_weight
-            })
-
-        scored_answers.sort(key=lambda x: x['score'], reverse=True)
-
-        vote_data = []
-
-        for item in scored_answers:
-            vote_data.append((
-                item['answer'], 
-                item['votes'], 
-                item['score']
-            ))
-
-        vote_dataframe = pd.DataFrame(
-            vote_data, 
-            columns=['Answer', 'Votes', 'Score']
-        )
-
-        vote_dataframe = vote_dataframe.round({'Score': 3})
-        # display(vote_dataframe)
-        
-        if not scored_answers:
-            print('\nFinal Answer: 0\n')
-            return 0
-
-        final_answer = scored_answers[0]['answer']    
-        print(f'\nFinal Answer: {final_answer}\n')
-
-        return final_answer
     
-    def solve_problem(self, problem: str) -> int:
+        for r in detailed_results:
+            ans = r.get("Answer")
+            ent = r.get("Entropy", float("inf"))
+            if ans is None:
+                continue
+            weight = 1.0 / max(ent, 1e-9)
+            answer_weights[ans] += weight
+            answer_votes[ans] += 1
     
-        print(f'\nProblem: {problem}\n')
-        
-        user_input = f'{problem} {self.cfg.preference_prompt}'
+        scored = [
+            {"answer": a, "votes": answer_votes[a], "score": w}
+            for a, w in answer_weights.items()
+        ]
+        scored.sort(key=lambda x: x["score"], reverse=True)
+    
+        vote_df = pd.DataFrame(scored) if scored else pd.DataFrame(columns=["answer", "votes", "score"])
+    
+        if not scored:
+            return 0, None, vote_df
+    
+        final_answer = scored[0]["answer"]
+    
+        # Choose a representative "selected attempt":
+        # among attempts that produced final_answer, pick minimal entropy (most confident).
+        candidates = [
+            (i, r.get("Entropy", float("inf")))
+            for i, r in enumerate(detailed_results)
+            if r.get("Answer") == final_answer
+        ]
+        selected_idx = min(candidates, key=lambda x: x[1])[0] if candidates else None
+    
+        return final_answer, selected_idx, vote_df
+
+    
+    def solve_problem(self, problem: str) -> tuple[int, dict]:
+        user_input = f"{problem} {self.cfg.preference_prompt}"
     
         elapsed_global = time.time() - self.notebook_start_time
         time_left = self.cfg.notebook_limit - elapsed_global
+    
+        # Use actual remaining problem count if you can (we’ll set it after solver init)
         problems_left_others = max(0, self.problems_remaining - 1)
         reserved_time = problems_left_others * self.cfg.base_problem_timeout
     
@@ -963,78 +1012,63 @@ class AIMO3Solver:
     
         deadline = time.time() + budget
     
-        print(f'Budget: {budget:.2f} seconds | Deadline: {deadline:.2f}\n')
-    
-        tasks = []
-    
-        for attempt_index in range(self.cfg.attempts):
-            tasks.append((self.cfg.system_prompt, attempt_index))
+        tasks = [(self.cfg.system_prompt, attempt_index) for attempt_index in range(self.cfg.attempts)]
     
         detailed_results = []
         valid_answers = []
-    
         stop_event = threading.Event()
-    
         executor = ThreadPoolExecutor(max_workers=self.cfg.workers)
     
         try:
-            futures = []
-    
-            for (system_prompt, attempt_index) in tasks:
-                future = executor.submit(
-                    self._process_attempt, 
-                    user_input, 
-                    system_prompt, 
-                    attempt_index, 
-                    stop_event, 
+            futures = [
+                executor.submit(
+                    self._process_attempt,
+                    user_input,
+                    system_prompt,
+                    attempt_index,
+                    stop_event,
                     deadline
                 )
-    
-                futures.append(future)
+                for (system_prompt, attempt_index) in tasks
+            ]
     
             for future in as_completed(futures):
                 try:
-                    result = future.result()
-                    detailed_results.append(result)
+                    r = future.result()
+                    detailed_results.append(r)
     
-                    if result['Answer'] is not None:
-                        valid_answers.append(result['Answer'])
+                    if r.get("Answer") is not None:
+                        valid_answers.append(r["Answer"])
     
                     counts = Counter(valid_answers).most_common(1)
-    
                     if counts and counts[0][1] >= self.cfg.early_stop:
                         stop_event.set()
-    
                         for f in futures:
                             f.cancel()
-    
                         break
     
-                except Exception as exc:
-                    print(f'Future failed: {exc}')
+                except Exception:
                     continue
     
         finally:
             stop_event.set()
             executor.shutdown(wait=True, cancel_futures=True)
-            
             self.problems_remaining = max(0, self.problems_remaining - 1)
     
-        if detailed_results:
-            results_dataframe = pd.DataFrame(detailed_results)
-            results_dataframe['Entropy'] = results_dataframe['Entropy'].round(3)
-            results_dataframe['Answer'] = results_dataframe['Answer'].astype('Int64')
+        # Decide final answer and representative attempt
+        final_answer, selected_idx, vote_df = self._select_answer(detailed_results)
+    
+        artifact = {
+            "budget_seconds": float(budget),
+            "deadline_ts": float(deadline),
+            "final_answer": int(final_answer),
+            "selected_attempt_index": selected_idx,  # 0-based index into detailed_results
+            "vote_df": vote_df,
+            "attempts": detailed_results,
+        }
+    
+        return final_answer, artifact
 
-            results_dataframe.to_csv("detailed_results.csv", index=False, encoding="utf-8")
-            
-            # display(results_dataframe.drop("Full Answer"))
-    
-        if not valid_answers:
-            print('\nResult: 0\n')
-    
-            return 0
-    
-        return self._select_answer(detailed_results)
     
     def __del__(self):
     
@@ -1055,32 +1089,122 @@ class AIMO3Solver:
                     pass
 
 # %%
-solver = AIMO3Solver(CFG)
+if not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
+    REFERENCE_PATH = "/kaggle/input/ai-mathematical-olympiad-progress-prize-3/reference.csv"
+    _ref_df = pl.read_csv(REFERENCE_PATH)
+    # Expect columns: id, question, answer (per your description)
+    REF_ANSWER_BY_ID = dict(zip(_ref_df["id"].to_list(), _ref_df["answer"].to_list()))
+    REF_QUESTION_BY_ID = dict(zip(_ref_df["id"].to_list(), _ref_df["problem"].to_list()))
+    TOTAL_PROBLEMS = _ref_df.height
+else:
+    REF_ANSWER_BY_ID = {}
+    REF_QUESTION_BY_ID = {}
+    TOTAL_PROBLEMS = 50
 
 # %%
 def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataFrame] = None) -> pl.DataFrame:
-    
-    id_value = id_.item(0)
-    question_text = question.item(0)
-    
+    id_value = int(id_.item(0))
+    question_text = str(question.item(0))
+
+    # Ground-truth answer (prefer what the gateway passes; else fallback to preloaded reference)
+    true_answer = None
+    if answer is not None:
+        try:
+            true_answer = int(answer.item(0))
+        except Exception:
+            true_answer = None
+    if true_answer is None and id_value in REF_ANSWER_BY_ID:
+        try:
+            true_answer = int(REF_ANSWER_BY_ID[id_value])
+        except Exception:
+            true_answer = None
+
     gc.disable()
-    
-    final_answer = solver.solve_problem(question_text)
-    
+    pred_answer, artifact = solver.solve_problem(question_text)
     gc.enable()
     gc.collect()
-    
-    return pl.DataFrame({'id': id_value, 'answer': final_answer})
+
+    attempts = artifact["attempts"]
+    selected_idx = artifact.get("selected_attempt_index", None)
+
+    # Identify the selected attempt record (raw solution text) if possible
+    selected_raw = ""
+    selected_entropy = None
+    if selected_idx is not None and 0 <= selected_idx < len(attempts):
+        selected_raw = attempts[selected_idx].get("Raw Output", "")
+        selected_entropy = attempts[selected_idx].get("Entropy", None)
+
+    # Compute correctness
+    is_correct = None
+    if true_answer is not None:
+        is_correct = (int(pred_answer) == int(true_answer))
+
+    # Build attempt log records with status + reject reason
+    attempt_records = []
+    for i, r in enumerate(attempts):
+        ans = r.get("Answer", None)
+        finish_reason = r.get("Finish Reason", "unknown")
+
+        if selected_idx is not None and i == selected_idx:
+            status = "selected"
+            reject_reason = ""
+        else:
+            status = "rejected"
+            if ans is None:
+                reject_reason = f"no_answer:{finish_reason}"
+            elif ans != pred_answer:
+                reject_reason = "different_answer"
+            else:
+                reject_reason = "same_answer_not_selected"
+
+        attempt_records.append({
+            "id": id_value,
+            "attempt": r.get("Attempt", i + 1),
+            "status": status,
+            "reject_reason": reject_reason,
+            "pred_final_answer": int(pred_answer),
+            "attempt_answer": ans,
+            "entropy": r.get("Entropy", None),
+            "response_length": r.get("Response Length", None),
+            "python_calls": r.get("Python Calls", None),
+            "python_errors": r.get("Python Errors", None),
+            "finish_reason": finish_reason,
+            "raw_output": r.get("Raw Output", ""),
+            "tool_calls": r.get("Tool Calls", []),
+        })
+
+    # Persist logs (thread-safe)
+    logger.log_attempts(attempt_records)
+    logger.log_solution_row(
+        id_value=id_value,
+        pred_answer=int(pred_answer),
+        true_answer=true_answer,
+        is_correct=is_correct,
+        selected_attempt=(attempts[selected_idx].get("Attempt") if selected_idx is not None and 0 <= selected_idx < len(attempts) else None),
+        selected_entropy=selected_entropy,
+        selected_raw_output=selected_raw
+    )
+
+    return pl.DataFrame({"id": id_value, "answer": int(pred_answer)})
+
 
 # %%
 inference_server = kaggle_evaluation.aimo_3_inference_server.AIMO3InferenceServer(predict)
 
+# %%
+solver = AIMO3Solver(CFG)
+if not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
+    solver.problems_remaining = TOTAL_PROBLEMS
+
+# %%
 if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
     inference_server.serve()
-    
 else:
     inference_server.run_local_gateway(
         ('/kaggle/input/ai-mathematical-olympiad-progress-prize-3/reference.csv',)
     )
+
+# %%
+!zip -r /kaggle/working/aimo3_logs.zip /kaggle/working/aimo3_logs
 
 
