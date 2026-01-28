@@ -1,5 +1,5 @@
 # %%
-%pip uninstall --yes 'keras' 'matplotlib' 'scikit-learn' 'tensorflow'
+# %pip uninstall --yes 'keras' 'matplotlib' 'scikit-learn' 'tensorflow'
 
 # %%
 import warnings
@@ -699,157 +699,200 @@ class AIMO3Solver:
         return total_entropy / token_count
     
     def _process_attempt(
-        self, 
-        problem: str, 
-        system_prompt: str, 
-        attempt_index: int, 
-        stop_event: threading.Event, 
+        self,
+        problem: str,
+        system_prompt: str,
+        attempt_index: int,
+        stop_event: threading.Event,
         deadline: float
     ) -> dict:
-    
-        if stop_event.is_set() or time.time() > deadline:
-            return {
-                'Attempt': attempt_index + 1, 
-                'Answer': None, 
-                "Full Answer": None,
-                'Python Calls': 0, 
-                'Python Errors': 0, 
-                'Response Length': 0, 
-                'Entropy': float('inf')
-            }
-    
-        local_tool = None
-        sandbox = None
+
+        # Always define these so we can safely return them
+        text_chunks: list[str] = []
+        tool_calls: list[dict] = []
+        finish_reason = "unknown"
         python_calls = 0
         python_errors = 0
         total_tokens = 0
         final_answer = None
-        
         logprobs_buffer = []
-    
-        attempt_seed = int(math.pow(self.cfg.seed + attempt_index, 2))
-    
+        sandbox = None
+
+        if stop_event.is_set():
+            finish_reason = "skipped_stop_event"
+            return {
+                "Attempt": attempt_index + 1,
+                "Answer": None,
+                "Raw Output": "",
+                "Finish Reason": finish_reason,
+                "Python Calls": 0,
+                "Python Errors": 0,
+                "Response Length": 0,
+                "Entropy": float("inf"),
+                "Tool Calls": [],
+            }
+
+        if time.time() > deadline:
+            finish_reason = "skipped_deadline"
+            return {
+                "Attempt": attempt_index + 1,
+                "Answer": None,
+                "Raw Output": "",
+                "Finish Reason": finish_reason,
+                "Python Calls": 0,
+                "Python Errors": 0,
+                "Response Length": 0,
+                "Entropy": float("inf"),
+                "Tool Calls": [],
+            }
+
+        local_tool = None
+        attempt_seed = int((self.cfg.seed + attempt_index) ** 2)
+
         try:
             sandbox = self.sandbox_pool.get(timeout=self.cfg.sandbox_timeout)
-    
             local_tool = AIMO3Tool(
-                local_jupyter_timeout=self.cfg.jupyter_timeout, 
-                tool_prompt=self.cfg.tool_prompt, 
+                local_jupyter_timeout=self.cfg.jupyter_timeout,
+                tool_prompt=self.cfg.tool_prompt,
                 sandbox=sandbox
             )
-    
+
             encoding = self.encoding
-            messages = self.template.apply_chat_template(
-                system_prompt, 
-                problem, 
-                local_tool.tool_config
-            )
-    
+            messages = self.template.apply_chat_template(system_prompt, problem, local_tool.tool_config)
             conversation = Conversation.from_messages(messages)
-    
-            for _ in range(self.cfg.turns):
-                if stop_event.is_set() or time.time() > deadline:
+
+            for _turn in range(self.cfg.turns):
+                if stop_event.is_set():
+                    finish_reason = "stopped_by_early_stop"
                     break
-    
+                if time.time() > deadline:
+                    finish_reason = "deadline_exceeded"
+                    break
+
                 prompt_ids = encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
                 max_tokens = self.cfg.context_tokens - len(prompt_ids)
-    
+
                 if max_tokens < self.cfg.buffer_tokens:
+                    finish_reason = "context_exhausted"
                     break
-    
+
                 stream = self.client.completions.create(
-                    model=self.cfg.served_model_name, 
-                    temperature=self.cfg.temperature, 
-                    logprobs=self.cfg.top_logprobs, 
-                    max_tokens=max_tokens, 
-                    prompt=prompt_ids, 
-                    seed=attempt_seed, 
-                    stream=True, 
+                    model=self.cfg.served_model_name,
+                    temperature=self.cfg.temperature,
+                    logprobs=self.cfg.top_logprobs,
+                    max_tokens=max_tokens,
+                    prompt=prompt_ids,
+                    seed=attempt_seed,
+                    stream=True,
                     extra_body={
-                        'min_p': self.cfg.min_p, 
-                        'stop_token_ids': self.stop_token_ids, 
-                        'return_token_ids': True
+                        "min_p": self.cfg.min_p,
+                        "stop_token_ids": self.stop_token_ids,
+                        "return_token_ids": True
                     }
                 )
-    
+
+                token_buffer = []
                 try:
-                    token_buffer = []
-                    text_chunks = []
-    
                     for chunk in stream:
-                        if stop_event.is_set() or time.time() > deadline:
+                        if stop_event.is_set():
+                            finish_reason = "stopped_by_early_stop"
                             break
-    
+                        if time.time() > deadline:
+                            finish_reason = "deadline_exceeded"
+                            break
+
                         new_tokens = chunk.choices[0].token_ids
-                        new_text = chunk.choices[0].text
-    
+                        new_text = chunk.choices[0].text or ""
+
                         if new_tokens:
                             token_buffer.extend(new_tokens)
                             total_tokens += len(new_tokens)
                             text_chunks.append(new_text)
-                            
+
                             chunk_logprobs = chunk.choices[0].logprobs
-                            
-                            if chunk_logprobs is not None:
-                                if chunk_logprobs.top_logprobs:
-                                    logprobs_buffer.extend(chunk_logprobs.top_logprobs)
-    
-                        if '}' in new_text:
-                            search_text = ''.join(text_chunks[-self.cfg.search_tokens:])
+                            if chunk_logprobs is not None and chunk_logprobs.top_logprobs:
+                                logprobs_buffer.extend(chunk_logprobs.top_logprobs)
+
+                        # Fast scan when '}' appears (heuristic)
+                        if "}" in new_text:
+                            search_text = "".join(text_chunks[-self.cfg.search_tokens:])
                             answer = self._scan_for_answer(search_text)
-    
                             if answer is not None:
                                 final_answer = answer
+                                finish_reason = "boxed_detected_in_stream"
                                 break
-    
                 finally:
                     stream.close()
-    
+
                 if final_answer is not None:
                     break
-    
+
                 if not token_buffer:
+                    # No tokens produced this turn
+                    if finish_reason == "unknown":
+                        finish_reason = "no_tokens"
                     break
-    
+
                 new_messages = encoding.parse_messages_from_completion_tokens(token_buffer, Role.ASSISTANT)
                 conversation.messages.extend(new_messages)
                 last_message = new_messages[-1]
-    
-                if last_message.channel == 'final':
+
+                if last_message.channel == "final":
                     answer_text = last_message.content[0].text
                     final_answer = self._scan_for_answer(answer_text)
+                    if final_answer is not None:
+                        finish_reason = "final_channel_answer"
+                    else:
+                        finish_reason = "final_channel_no_answer"
                     break
-    
-                if last_message.recipient == 'python':
+
+                if last_message.recipient == "python":
                     python_calls += 1
+                    # Capture the code the model requested
+                    raw_script = last_message.content[0].text
+                    final_script = local_tool._ensure_last_print(raw_script)
+
                     tool_responses = local_tool.process_sync_plus(last_message)
-    
                     response_text = tool_responses[0].content[0].text
-    
-                    if response_text.startswith('[ERROR]') or 'Traceback' in response_text or 'Error:' in response_text:
+
+                    tool_calls.append({
+                        "code": final_script,
+                        "output": response_text
+                    })
+
+                    if response_text.startswith("[ERROR]") or "Traceback" in response_text or "Error:" in response_text:
                         python_errors += 1
-    
+
                     conversation.messages.extend(tool_responses)
-    
+
+            if finish_reason == "unknown":
+                finish_reason = "max_turns_or_no_answer"
+
         except Exception as exc:
             python_errors += 1
-    
+            finish_reason = f"exception:{type(exc).__name__}"
+
         finally:
             if sandbox is not None:
-                sandbox.reset()
-                self.sandbox_pool.put(sandbox)
-    
+                try:
+                    sandbox.reset()
+                finally:
+                    self.sandbox_pool.put(sandbox)
+
         mean_entropy = self._compute_mean_entropy(logprobs_buffer)
-    
+
         return {
-            'Attempt': attempt_index + 1, 
-            'Response Length': total_tokens, 
-            'Python Calls': python_calls, 
-            'Python Errors': python_errors, 
-            'Entropy': mean_entropy, 
-            'Answer': final_answer,
-            "Full Answer": ''.join(text_chunks),
+            "Attempt": attempt_index + 1,
+            "Response Length": total_tokens,
+            "Python Calls": python_calls,
+            "Python Errors": python_errors,
+            "Entropy": mean_entropy,
+            "Answer": final_answer,
+            "Raw Output": "".join(text_chunks),
+            "Finish Reason": finish_reason,
+            "Tool Calls": tool_calls,
         }
+
     
     def _select_answer(self, detailed_results: list) -> int:
 
@@ -892,7 +935,7 @@ class AIMO3Solver:
         )
 
         vote_dataframe = vote_dataframe.round({'Score': 3})
-        display(vote_dataframe)
+        # display(vote_dataframe)
         
         if not scored_answers:
             print('\nFinal Answer: 0\n')
@@ -984,7 +1027,7 @@ class AIMO3Solver:
 
             results_dataframe.to_csv("detailed_results.csv", index=False, encoding="utf-8")
             
-            display(results_dataframe.drop("Full Answer"))
+            # display(results_dataframe.drop("Full Answer"))
     
         if not valid_answers:
             print('\nResult: 0\n')
