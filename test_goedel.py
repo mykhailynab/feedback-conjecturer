@@ -422,6 +422,24 @@ set_option maxHeartbeats 0
 
 open BigOperators Real Nat Topology Rat
 
+-- ### Step-by-Step Abstract Plan
+
+-- 1. **Move All Terms to One Side:**  
+--    Rewrite the equation as \\( x^2 + y^2 - 2x + 4y + 5 = 0 \\).
+
+-- 2. **Complete the Squares:**  
+--    - Complete the square for \\( x \\): \\( x^2 - 2x = (x - 1)^2 - 1 \\).
+--    - Complete the square for \\( y \\): \\( y^2 + 4y = (y + 2)^2 - 4 \\).
+
+-- 3. **Substitute and Simplify:**  
+--    Substitute the completed squares into the equation to get \\( (x - 1)^2 + (y + 2)^2 = 0 \\).
+
+-- 4. **Solve for Variables:**  
+--    Since squares are non-negative, deduce \\( x - 1 = 0 \\) and \\( y + 2 = 0 \\).
+
+-- 5. **Find \\( x + y \\):**  
+--    Calculate \\( x + y = 1 + (-2) = -1 \\).
+
 theorem square_equation_solution {x y : ℝ} (h : x^2 + y^2 = 2*x - 4*y - 5) : x + y = -1 := by
   sorry
 """.strip()
@@ -495,11 +513,11 @@ theorem square_equation_solution {x y : ℝ} (h : x^2 + y^2 = 2*x - 4*y - 5) : x
         (out_dir / f"round_{r}_lean_stderr.txt").write_text(check.stderr, encoding="utf-8")
 
         if check.ok:
-            print(f"[Round {r}] ✅ Lean check PASSED.")
+            print(f"[Round {r}] Lean check PASSED.")
             best_pass_path = lean_file_path
             break
 
-        print(f"[Round {r}] ❌ Lean check FAILED. Preparing correction prompt...")
+        print(f"[Round {r}] Lean check FAILED. Preparing correction prompt...")
 
         # Build structured error feedback
         if check.json_errors:
