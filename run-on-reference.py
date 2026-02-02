@@ -220,52 +220,196 @@ class CFG:
 set_seed(CFG.seed)
 
 # %%
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
 class RunLogger:
-    def __init__(self, attempts_path: str, solutions_path: str):
+    """
+    Writes:
+      - attempts.jsonl  : one record per attempt (you already do this)
+      - solutions.csv   : one row per problem (you already do this)
+      - events.jsonl    : timestamped high-level lifecycle events (NEW)
+
+    Additions:
+      - More columns in solutions.csv (timing/budget/vote summary + counts)
+      - Per-record timestamps, elapsed_ms, and a concise summary field
+      - Optional verbose console printing
+    """
+    def __init__(
+        self,
+        attempts_path: str,
+        solutions_path: str,
+        log_dir: str | None = None,
+        verbose: bool = True
+    ):
         self.attempts_path = attempts_path
         self.solutions_path = solutions_path
+        self.verbose = verbose
         self._lock = threading.Lock()
+
+        # events.jsonl lives next to attempts/solutions unless overridden
+        if log_dir is None:
+            log_dir = str(Path(solutions_path).parent)
+        self.events_path = str(Path(log_dir) / "events.jsonl")
+
         self._init_solutions_csv()
+
+    # ---------- utils ----------
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _safe_str(self, x, max_len: int = 2000) -> str:
+        if x is None:
+            return ""
+        s = str(x)
+        if len(s) > max_len:
+            return s[:max_len] + f"...[truncated:{len(s) - max_len}]"
+        return s
+
+    def _append_jsonl(self, path: str, records: list[dict]):
+        with open(path, "a", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     def _init_solutions_csv(self):
         if os.path.exists(self.solutions_path):
             return
+
         header = [
-            "id", "pred_answer", "true_answer", "is_correct",
+            # identity
+            "id",
+
+            # prediction/gt
+            "pred_answer", "true_answer", "is_correct",
+
+            # selection
             "selected_attempt", "selected_entropy",
-            "selected_raw_output"
+
+            # timing/budget
+            "budget_seconds", "deadline_ts",
+            "solve_started_ts", "solve_finished_ts", "solve_elapsed_ms",
+
+            # attempt aggregates
+            "attempts_total", "attempts_with_answer",
+            "attempts_selected", "attempts_rejected",
+
+            # finish reason counts (json-ish)
+            "finish_reason_counts",
+
+            # vote summary (json-ish)
+            "vote_summary",
+
+            # raw selected solution (can be large)
+            "selected_raw_output",
         ]
         with open(self.solutions_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(header)
+            csv.writer(f).writerow(header)
 
-    def log_attempts(self, attempt_records: list[dict]):
-        # JSONL: one record per attempt
+    # ---------- NEW: event logging ----------
+    def log_event(self, event_type: str, payload: dict):
+        """
+        Write a high-level event to events.jsonl.
+        Example event_type: problem_start, problem_end, early_stop, exception, deadline
+        """
+        rec = {
+            "ts": self._now_iso(),
+            "event": event_type,
+            **payload,
+        }
         with self._lock:
-            with open(self.attempts_path, "a", encoding="utf-8") as f:
-                for rec in attempt_records:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            self._append_jsonl(self.events_path, [rec])
 
+        if self.verbose:
+            # compact console status
+            msg = payload.get("msg") or ""
+            print(f"[LOG:{event_type}] {msg}".rstrip())
+
+    # ---------- attempt logging ----------
+    def log_attempts(self, attempt_records: list[dict]):
+        """
+        Expects each record already includes your fields.
+        We enrich each record with ts + compact summary.
+        """
+        ts = self._now_iso()
+        enriched = []
+        for r in attempt_records:
+            # generate a concise human-readable summary
+            summary = (
+                f"id={r.get('id')} attempt={r.get('attempt')} "
+                f"status={r.get('status')} ans={r.get('attempt_answer')} "
+                f"final={r.get('pred_final_answer')} "
+                f"ent={r.get('entropy')} "
+                f"py={r.get('python_calls')}/{r.get('python_errors')} "
+                f"finish={r.get('finish_reason')}"
+            )
+            rr = dict(r)
+            rr["ts"] = ts
+            rr["summary"] = summary
+            # avoid exploding jsonl if raw_output is enormous (still keep it, but you can truncate)
+            rr["raw_output"] = self._safe_str(rr.get("raw_output", ""), max_len=200000)
+            enriched.append(rr)
+
+        with self._lock:
+            self._append_jsonl(self.attempts_path, enriched)
+
+        if self.verbose and enriched:
+            # print short status line per problem (not per attempt)
+            idv = enriched[0].get("id")
+            sel = [x for x in enriched if x.get("status") == "selected"]
+            sel_ans = sel[0].get("attempt_answer") if sel else None
+            print(f"[LOG:attempts] id={idv} attempts={len(enriched)} selected_ans={sel_ans}")
+
+    # ---------- solution logging (extended) ----------
     def log_solution_row(
         self,
-        id_value: int,
+        id_value: str,
         pred_answer: int,
         true_answer: Optional[int],
         is_correct: Optional[bool],
         selected_attempt: Optional[int],
         selected_entropy: Optional[float],
-        selected_raw_output: str
+        selected_raw_output: str,
+
+        # OPTIONAL extras (you can pass these from artifact; safe to omit)
+        budget_seconds: Optional[float] = None,
+        deadline_ts: Optional[float] = None,
+        solve_started_ts: Optional[str] = None,
+        solve_finished_ts: Optional[str] = None,
+        solve_elapsed_ms: Optional[int] = None,
+        attempts_total: Optional[int] = None,
+        attempts_with_answer: Optional[int] = None,
+        attempts_selected: Optional[int] = None,
+        attempts_rejected: Optional[int] = None,
+        finish_reason_counts: Optional[dict] = None,
+        vote_summary: Optional[dict] = None,
     ):
+        # truncate raw output for csv sanity (keeps full in attempts.jsonl already)
+        raw = self._safe_str(selected_raw_output, max_len=200000)
+
+        row = [
+            id_value,
+            pred_answer, true_answer, is_correct,
+            selected_attempt, selected_entropy,
+            budget_seconds, deadline_ts,
+            solve_started_ts, solve_finished_ts, solve_elapsed_ms,
+            attempts_total, attempts_with_answer,
+            attempts_selected, attempts_rejected,
+            json.dumps(finish_reason_counts or {}, ensure_ascii=False),
+            json.dumps(vote_summary or {}, ensure_ascii=False),
+            raw
+        ]
+
         with self._lock:
             with open(self.solutions_path, "a", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow([
-                    id_value, pred_answer, true_answer,
-                    is_correct, selected_attempt, selected_entropy,
-                    selected_raw_output
-                ])
+                csv.writer(f).writerow(row)
 
-logger = RunLogger(CFG.attempts_path, CFG.solutions_path)
+        if self.verbose:
+            print(
+                f"[LOG:solution] id={id_value} pred={pred_answer} "
+                f"true={true_answer} correct={is_correct} "
+                f"selected_attempt={selected_attempt} ent={selected_entropy}"
+            )
+
 
 # %%
 class AIMO3Template:
@@ -1102,8 +1246,12 @@ else:
     TOTAL_PROBLEMS = 50
 
 # %%
+logger = RunLogger(CFG.attempts_path, CFG.solutions_path)
+
+# %%
 def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataFrame] = None) -> pl.DataFrame:
-    id_value = int(id_.item(0))
+    id_value = id_.item(0)
+    logger.log_event("problem_start", {"id": id_value})
     question_text = str(question.item(0))
 
     # Ground-truth answer (prefer what the gateway passes; else fallback to preloaded reference)
@@ -1173,7 +1321,28 @@ def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataF
             "tool_calls": r.get("Tool Calls", []),
         })
 
-    # Persist logs (thread-safe)
+    attempts_total = len(attempt_records)
+    attempts_selected = sum(1 for x in attempt_records if x["status"] == "selected")
+    attempts_rejected = attempts_total - attempts_selected
+    attempts_with_answer = sum(1 for x in attempt_records if x["attempt_answer"] is not None)
+
+    # Finish reason histogram
+    finish_reason_counts = {}
+    for x in attempt_records:
+        fr = x.get("finish_reason", "unknown")
+        finish_reason_counts[fr] = finish_reason_counts.get(fr, 0) + 1
+    
+    # Vote summary from artifact["vote_df"]
+    vote_summary = {}
+    try:
+        df = artifact["vote_df"]
+        # keep just top 5 for compactness
+        vote_summary = {
+            "top": df.head(5).to_dict(orient="records")
+        }
+    except Exception:
+        vote_summary = {}
+    
     logger.log_attempts(attempt_records)
     logger.log_solution_row(
         id_value=id_value,
@@ -1182,8 +1351,20 @@ def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataF
         is_correct=is_correct,
         selected_attempt=(attempts[selected_idx].get("Attempt") if selected_idx is not None and 0 <= selected_idx < len(attempts) else None),
         selected_entropy=selected_entropy,
-        selected_raw_output=selected_raw
+        selected_raw_output=selected_raw,
+    
+        budget_seconds=artifact.get("budget_seconds"),
+        deadline_ts=artifact.get("deadline_ts"),
+    
+        attempts_total=attempts_total,
+        attempts_with_answer=attempts_with_answer,
+        attempts_selected=attempts_selected,
+        attempts_rejected=attempts_rejected,
+        finish_reason_counts=finish_reason_counts,
+        vote_summary=vote_summary,
     )
+
+    logger.log_event("problem_end", {"id": id_value, "pred": int(pred_answer), "true": true_answer, "correct": is_correct})
 
     return pl.DataFrame({"id": id_value, "answer": int(pred_answer)})
 
