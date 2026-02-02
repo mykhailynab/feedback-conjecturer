@@ -319,39 +319,143 @@ class VLLMServer:
 
 # ----------------------------- Main generator -----------------------------
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a Lean 4 formalization assistant. Your task is to produce a Lean 4 file that contains "
-    "exactly ONE theorem (or lemma) whose proof is `by sorry`. The theorem should be a correctness "
-    "certificate: if the theorem were proven in Lean, it would justify that the provided integer answer "
-    "is correct for the given math problem.\n\n"
-    "Rules:\n"
-    "  - Output ONLY Lean code (no markdown fences, no commentary).\n"
-    "  - Include any necessary imports (prefer `import Mathlib`). Add more imports only if truly needed.\n"
-    "  - You may introduce `def`/`abbrev`/`structure` declarations as needed to formalize the statement.\n"
-    "  - There must be exactly ONE theorem/lemma statement in the entire output.\n"
-    "  - That theorem/lemma must end with `:= by sorry` (or `:= by` then `sorry` on the next line).\n"
-    "  - Do NOT include any other theorems/lemmas, and do NOT use `sorry` anywhere except the final `by sorry`.\n"
-    "  - Name the theorem `problem_<ID>_answer_correct` where <ID> is the problem id.\n"
-)
+DEFAULT_SYSTEM_PROMPT = r"""
+You are a Lean 4 formalization assistant.
 
-def build_user_prompt(problem_id: str, problem_text: str, candidate_answer: int, raw_solution: str) -> str:
-    # Keep raw solution bounded; it can be huge in attempts.jsonl
-    raw_solution = clip(raw_solution, 20000)
+Goal
+- Given (1) a math problem statement in natural language and (2) a candidate integer answer,
+  produce Lean 4 code containing EXACTLY ONE theorem (or lemma) named:
+    `problem_<ID>_answer_correct`
+  (with <ID> replaced by the given problem id).
+- The theorem must be a *correctness certificate*: if the theorem were proven, it would logically imply
+  that the candidate integer answer is correct for the problem.
+
+Hard constraints (must follow)
+1) Your final response MUST contain exactly one markdown fenced code block:
+      ```lean4
+      ...Lean code...
+      ```
+   No other text outside the code block.
+2) Inside the code block:
+   - Include imports as needed (prefer `import Mathlib`).
+   - You may define auxiliary `def`/`abbrev`/`structure`/`notation` to model the problem.
+   - There must be EXACTLY ONE `theorem` or `lemma` in the entire file.
+   - That theorem/lemma must end in `:= by sorry` (or `:= by` then `sorry` on the next line).
+   - The word `sorry` must appear exactly once in the entire file (only at the end proof stub).
+   - Do NOT include any additional theorems/lemmas (including helper lemmas).
+3) The theorem statement should directly connect the problem to the candidate answer.
+   Use quantifiers/constraints to reflect the problem, then conclude an equality or proposition that
+   makes the candidate answer “the” correct answer.
+
+Style guidance (strongly recommended)
+- Prefer a statement of the form:
+    theorem problem_<ID>_answer_correct : (ProblemSpec ...) → candidate = ... := by sorry
+  or
+    theorem problem_<ID>_answer_correct : candidate = <computed value> := by sorry
+  when the problem admits a clean closed-form statement.
+- If the problem is an "existence/uniqueness" question, express that with `∃!` and conclude that the
+  extracted numeric answer equals `candidate_answer`.
+- If the problem asks for “the value of …”, model the expression as a `Nat`/`Int`/`ℤ`/`ℚ`/`ℝ` expression,
+  then state that it equals the candidate.
+- If the problem is combinatorial (counts), define a finite set and use `Fintype.card` / `Finset.card`.
+- If the problem is number theory, use `Nat` or `Int` with modular arithmetic; prefer Mathlib notations.
+
+Few-shot examples (format + intent)
+
+EXAMPLE 1 (simple algebraic value)
+Input:
+- id: demo1
+- problem: "Compute (3+5)^2."
+- candidate answer: 64
+
+Output:
+```lean4
+import Mathlib
+
+theorem problem_demo1_answer_correct : (3 + 5 : ℤ)^2 = (64 : ℤ) := by
+  sorry
+````
+
+EXAMPLE 2 (counting / finite sets)
+Input:
+
+* id: demo2
+* problem: "How many integers n in {1,2,3,4,5} satisfy n ≤ 3?"
+* candidate answer: 3
+
+Output:
+
+```lean4
+import Mathlib
+
+def demo2Set : Finset ℕ := {1, 2, 3, 4, 5}
+
+theorem problem_demo2_answer_correct :
+    (demo2Set.filter (fun n => n ≤ 3)).card = 3 := by
+  sorry
+```
+
+EXAMPLE 3 (number theory / modular condition)
+Input:
+
+* id: demo3
+* problem: "Find the smallest nonnegative integer x such that x ≡ 2 (mod 5) and x ≡ 3 (mod 7)."
+* candidate answer: 17
+
+Output:
+
+```lean4
+import Mathlib
+
+theorem problem_demo3_answer_correct :
+    IsLeast {x : ℕ | x ≡ 2 [ZMOD 5] ∧ x ≡ 3 [ZMOD 7]} 17 := by
+  sorry
+```
+
+Remember:
+
+* Exactly one theorem/lemma total.
+* Exactly one `sorry`.
+* Final response is only the single `lean4` block.
+""".strip()
+
+def build_user_prompt(problem_id: str, problem_text: str, candidate_answer: int, raw_solution: str | None = None) -> str:
+    """
+    User prompt with lightweight “scaffolding” to encourage a good certificate theorem.
+
+    We do NOT require the model to use raw_solution, but including a short excerpt can help.
+    """
+    raw_solution_section = ""
+    if raw_solution:
+        raw_solution_section = (
+            "A previous attempt (may be wrong, for context only):\n"
+            f"{raw_solution}\n\n"
+        )
 
     return (
-        f"Problem id: {problem_id}\n\n"
+        f"ID: {problem_id}\n\n"
         f"Problem statement:\n{problem_text}\n\n"
         f"Candidate integer answer: {candidate_answer}\n\n"
-        f"One model solution attempt (may be incomplete/incorrect):\n{raw_solution}\n\n"
+        f"{raw_solution_section}"
         "Task:\n"
-        "Produce Lean 4 code that contains exactly ONE theorem named `problem_<ID>_answer_correct` "
-        "with <ID> replaced by the given id. The theorem statement must be a correctness certificate: "
-        "if proven, it would imply that the candidate integer answer is correct for the problem.\n\n"
-        "Constraints:\n"
-        "  - Output ONLY Lean code.\n"
-        "  - Include necessary imports (prefer `import Mathlib`).\n"
-        "  - You may define auxiliary predicates/definitions to represent the problem.\n"
-        "  - Exactly ONE theorem/lemma total; end it with `by sorry`.\n"
+        "Produce Lean 4 code that contains exactly ONE theorem named:\n"
+        f"  problem_{problem_id}_answer_correct\n\n"
+        "The theorem must be a correctness certificate: if proven, it would imply that the candidate integer answer is correct.\n\n"
+        "Mandatory output format:\n"
+        "- Your entire response must be exactly one markdown fenced code block:\n"
+        "  ```lean4\n"
+        "  ...\n"
+        "  ```\n"
+        "- No text outside the code block.\n\n"
+        "Mandatory constraints:\n"
+        "- Exactly one theorem/lemma in the file.\n"
+        "- Exactly one occurrence of `sorry`, at the end of that theorem proof.\n"
+        "- Add imports (prefer `import Mathlib`) and any necessary defs, but no extra lemmas.\n"
+        "- End the theorem with `:= by sorry` (or `:= by` then `sorry` on next line).\n\n"
+        "Suggestion (not required):\n"
+        "- If the problem asks for a number of objects, define the set/Finset and state its `card = <candidate>`.\n"
+        "- If it asks for a value of an expression, state that expression equals `<candidate>` in ℤ/ℕ/ℚ/ℝ.\n"
+        "- If it asks for smallest/largest such integer, use `IsLeast` / `IsGreatest`.\n"
     )
 
 def generate_theorem_once(
@@ -643,7 +747,7 @@ def main():
                 problem_id=pid,
                 problem_text=problem_text,
                 candidate_answer=candidate,
-                raw_solution=raw_solution,
+                # raw_solution=raw_solution,
             )
 
             print(
@@ -673,7 +777,7 @@ def main():
 
                 raw_out = text
                 lean_code = extract_lean_code(raw_out)
-                lean_code = ensure_single_theorem_ends_by_sorry(lean_code)
+                # lean_code = ensure_single_theorem_ends_by_sorry(lean_code)
 
                 rec = {
                     "ts": now_iso(),
@@ -688,7 +792,7 @@ def main():
                     "generation_meta": meta,
                     "lean_code": lean_code,
                     # keep a clipped copy of model output for debugging
-                    "model_output": clip(raw_out, 20000),
+                    "model_output": raw_out,
                 }
                 append_jsonl(str(out_path), rec)
 
