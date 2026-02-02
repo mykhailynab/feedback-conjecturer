@@ -358,6 +358,25 @@ def write_lean_file(project_dir: Path, rel_path: str, content: str) -> Path:
     return out_path
 
 
+def get_next_run_dir(base_dir: Path) -> Path:
+    """
+    Returns the next available run directory path (e.g., base_dir/run_i)
+    where i is the smallest integer such that run_i does not exist.
+    """
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    max_idx = -1
+    for path in base_dir.glob("run_*"):
+        if path.is_dir():
+            # Use regex to extract the trailing number
+            match = re.search(r"run_(\d+)$", path.name)
+            if match:
+                max_idx = max(max_idx, int(match.group(1)))
+    
+    # The next folder is max_idx + 1
+    return base_dir / f"run_{max_idx + 1}"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Goedel (Ollama) + Lean checking + self-correction (single-thread).")
 
@@ -394,6 +413,7 @@ def main():
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir).expanduser().resolve()
+    out_dir = get_next_run_dir(out_dir)
     ensure_dir(out_dir)
 
     project_dir = Path(args.project_dir).expanduser().resolve()
