@@ -422,24 +422,6 @@ set_option maxHeartbeats 0
 
 open BigOperators Real Nat Topology Rat
 
--- ### Step-by-Step Abstract Plan
-
--- 1. **Move All Terms to One Side:**  
---    Rewrite the equation as \\( x^2 + y^2 - 2x + 4y + 5 = 0 \\).
-
--- 2. **Complete the Squares:**  
---    - Complete the square for \\( x \\): \\( x^2 - 2x = (x - 1)^2 - 1 \\).
---    - Complete the square for \\( y \\): \\( y^2 + 4y = (y + 2)^2 - 4 \\).
-
--- 3. **Substitute and Simplify:**  
---    Substitute the completed squares into the equation to get \\( (x - 1)^2 + (y + 2)^2 = 0 \\).
-
--- 4. **Solve for Variables:**  
---    Since squares are non-negative, deduce \\( x - 1 = 0 \\) and \\( y + 2 = 0 \\).
-
--- 5. **Find \\( x + y \\):**  
---    Calculate \\( x + y = 1 + (-2) = -1 \\).
-
 theorem square_equation_solution {x y : ℝ} (h : x^2 + y^2 = 2*x - 4*y - 5) : x + y = -1 := by
   sorry
 """.strip()
