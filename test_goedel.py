@@ -137,6 +137,22 @@ def extract_lean4_code_block(model_text: str) -> Optional[str]:
     return None
 
 
+_BY_CLAUSE_RE = re.compile(r":=\s*by\b", re.MULTILINE)
+
+def normalize_for_prompt(statement: str) -> str:
+    """
+    Return a version of `statement` whose main theorem ends with `:= by sorry`.
+      - finds the first occurrence of ':= by'
+      - truncates everything after it
+      - appends ':= by sorry'
+    """
+    m = _BY_CLAUSE_RE.search(statement)
+    if not m:
+        raise ValueError("normalize_for_prompt: cannot find ':= by' in the input statement.")
+    prefix = statement[: m.start()]  # everything before ':= by'
+    return prefix + ":= by sorry"
+
+
 # ----------------------------- Lean error formatting ---------------------------
 
 def _line_offsets(lines: List[str]) -> List[int]:
@@ -445,6 +461,8 @@ open BigOperators Real Nat Topology Rat
 theorem square_equation_solution {x y : ℝ} (h : x^2 + y^2 = 2*x - 4*y - 5) : x + y = -1 := by
   sorry
 """.strip()
+        
+    formal_statement = normalize_for_prompt(formal_statement)
 
     # Ollama options
     options: Dict[str, Any] = {
