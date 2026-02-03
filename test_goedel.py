@@ -412,7 +412,7 @@ def main():
     ap.set_defaults(enable_thinking=True)
 
     # Lean project
-    ap.add_argument("--project_dir", default="/Users/mila/lean/mathlib_playground", help="Lake project directory")
+    ap.add_argument("--project_dir", default="/Users/mila/lean/mathlib4", help="Lake project directory")
     ap.add_argument("--lean_relpath", default="GoedelRun.lean", help="Lean file path relative to project_dir")
     ap.add_argument("--lean_timeout", type=int, default=120)
 
@@ -452,16 +452,39 @@ def main():
         # Default example
         formal_statement = """
 import Mathlib
-import Aesop
 
-set_option maxHeartbeats 0
+open scoped BigOperators
 
-open BigOperators Real Nat Topology Rat
+/-- The constant `M = 2·3·5·7·11·13`. -/
+def M : Nat := 2 * 3 * 5 * 7 * 11 * 13
 
-theorem square_equation_solution {x y : ℝ} (h : x^2 + y^2 = 2*x - 4*y - 5) : x + y = -1 := by
+/-- The main input `n₀ = M^15`. -/
+def n₀ : Nat := M ^ 15
+
+/-- The floor term `⌊ 1/j + (n-i)/n ⌋`, interpreted in ℚ and floored to ℤ. -/
+def floorTerm (n i j : Nat) : Int :=
+  Int.floor ((1 : Rat) / (j : Rat) + ((n - i : Nat) : Rat) / (n : Rat))
+
+/-- A sum over the integer interval `[a,b]` without using `∑ ... in ...`. -/
+def sumIcc {α : Type} [AddCommMonoid α] (a b : Nat) (g : Nat → α) : α :=
+  Finset.sum (Finset.Icc a b) g
+
+/-- The original double-sum definition of `f`, valued in ℤ, without `∑ ... in ...`. -/
+def fFloor (n : Nat) : Int :=
+  sumIcc 1 n (fun i =>
+    sumIcc 1 n (fun j =>
+      ((j : Int) ^ (1024 : Nat)) * floorTerm n i j))
+
+/-
+  Lemma 1 (floor characterization):
+  For 1 ≤ i ≤ n and 1 ≤ j, the floor is 1 iff i ≤ n/j, else 0.
+-/
+theorem floorTerm_eq_indicator
+  (n i j : Nat) (hn : n ≠ 0) (hj : j ≠ 0) (hi1 : 1 ≤ i) (hin : i ≤ n) :
+  floorTerm n i j = (if i ≤ n / j then (1 : Int) else 0) := by
   sorry
 """.strip()
-        
+
     formal_statement = normalize_for_prompt(formal_statement)
 
     # Ollama options

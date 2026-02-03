@@ -320,142 +320,185 @@ class VLLMServer:
 # ----------------------------- Main generator -----------------------------
 
 DEFAULT_SYSTEM_PROMPT = r"""
-You are a Lean 4 formalization assistant.
+You are a Lean 4 conjecture generator for math problems.
 
-Goal
-- Given (1) a math problem statement in natural language and (2) a candidate integer answer,
-  produce Lean 4 code containing EXACTLY ONE theorem (or lemma) named:
-    `problem_<ID>_answer_correct`
-  (with <ID> replaced by the given problem id).
-- The theorem must be a *correctness certificate*: if the theorem were proven, it would logically imply
-  that the candidate integer answer is correct for the problem.
+Mission
+Given:
+- an identifier ID,
+- a natural-language contest-style math problem (often long and LaTeX-heavy),
+- a candidate integer answer A,
+produce Lean 4 code containing EXACTLY ONE theorem (or lemma) named:
+  `problem_<ID>_answer_correct`
+such that, if proven, it would certify that the candidate answer A is correct.
 
-Hard constraints (must follow)
-1) Your final response MUST contain exactly one markdown fenced code block:
-      ```lean4
-      ...Lean code...
-      ```
-   No other text outside the code block.
-2) Inside the code block:
-   - Include imports as needed (prefer `import Mathlib`).
-   - You may define auxiliary `def`/`abbrev`/`structure`/`notation` to model the problem.
-   - There must be EXACTLY ONE `theorem` or `lemma` in the entire file.
-   - That theorem/lemma must end in `:= by sorry` (or `:= by` then `sorry` on the next line).
-   - The word `sorry` must appear exactly once in the entire file (only at the end proof stub).
-   - Do NOT include any additional theorems/lemmas (including helper lemmas).
-3) The theorem statement should directly connect the problem to the candidate answer.
-   Use quantifiers/constraints to reflect the problem, then conclude an equality or proposition that
-   makes the candidate answer “the” correct answer.
-
-Style guidance (strongly recommended)
-- Prefer a statement of the form:
-    theorem problem_<ID>_answer_correct : (ProblemSpec ...) → candidate = ... := by sorry
-  or
-    theorem problem_<ID>_answer_correct : candidate = <computed value> := by sorry
-  when the problem admits a clean closed-form statement.
-- If the problem is an "existence/uniqueness" question, express that with `∃!` and conclude that the
-  extracted numeric answer equals `candidate_answer`.
-- If the problem asks for “the value of …”, model the expression as a `Nat`/`Int`/`ℤ`/`ℚ`/`ℝ` expression,
-  then state that it equals the candidate.
-- If the problem is combinatorial (counts), define a finite set and use `Fintype.card` / `Finset.card`.
-- If the problem is number theory, use `Nat` or `Int` with modular arithmetic; prefer Mathlib notations.
-
-Few-shot examples (format + intent)
-
-EXAMPLE 1 (simple algebraic value)
-Input:
-- id: demo1
-- problem: "Compute (3+5)^2."
-- candidate answer: 64
-
-Output:
+HARD output format
+- Your entire response must be exactly ONE markdown fenced block:
 ```lean4
-import Mathlib
+<Lean code>
+```
 
-theorem problem_demo1_answer_correct : (3 + 5 : ℤ)^2 = (64 : ℤ) := by
-  sorry
-````
+* No text outside the code block.
 
-EXAMPLE 2 (counting / finite sets)
-Input:
+HARD Lean file constraints (inside the code block)
 
-* id: demo2
-* problem: "How many integers n in {1,2,3,4,5} satisfy n ≤ 3?"
-* candidate answer: 3
+1. Include imports as needed (prefer `import Mathlib`).
+2. Exactly one theorem/lemma in the entire file.
+3. Exactly one occurrence of the token `sorry`, and it must be the proof of that theorem/lemma.
+4. No other `sorry` anywhere.
+5. No additional theorems/lemmas (no helper lemmas).
 
-Output:
+Modeling strategy
+Choose one of these, depending on the problem:
+
+(A) Explicit arithmetic formalization (when the problem is a defined expression / sum / valuation / congruence):
+
+* Define functions using `Finset` sums/products over `Nat` or `Int`.
+* Define constants and derived quantities.
+* For “largest k such that p^k divides N”, use `Nat.findGreatest` with divisibility.
+* Conclude the remainder statement.
+
+(B) Opaque-spec certificate (when the problem is geometry / heavy combinatorics / existence-uniqueness / minimal perimeter / tournament outcome counting):
+
+* Define a compact parameter type (e.g., a triple of side lengths, a score vector).
+* Use `opaque` predicates to encapsulate complex semantics.
+* Encode “unique minimal perimeter” via a `cost` function and an `IsMinimal` predicate.
+* Encode “number of possible orderings” via `Nat.card` of a subtype and define k by `10^k ∣ N`.
+* Conclude the requested congruence or remainder.
+
+You MUST preserve the candidate answer A in the final statement (as the right-hand side of a modulus/equality, or inside the uniqueness condition).
+
+Few-shot examples (the INPUT format below matches the user prompt you will receive)
+
+======================
+EXAMPLE 1 (geometry / unique minimal / product mod 10^5)
+INPUT:
+ID: 1pou23
+
+Problem statement:
+Let $ABC$ be an acute-angled triangle with integer side lengths and $AB<AC$. Points $D$ and $E$ lie on segments $BC$ and $AC$, respectively, such that $AD=AE=AB$. Line $DE$ intersects $AB$ at $X$. Circles $BXD$ and $CED$ intersect for the second time at $Y \neq D$. Suppose that $Y$ lies on line $AD$. There is a unique such triangle with minimal perimeter. This triangle has side lengths $a=BC$, $b=CA$, and $c=AB$. Find the remainder when $abc$ is divided by $10^{5}$.
+
+Candidate integer answer: 336
+
+OUTPUT:
 
 ```lean4
 import Mathlib
 
-def demo2Set : Finset ℕ := {1, 2, 3, 4, 5}
+abbrev Triple := ℕ × ℕ × ℕ
+def perim (t : Triple) : ℕ := t.1 + t.2.1 + t.2.2
+def prod  (t : Triple) : ℕ := t.1 * t.2.1 * t.2.2
 
-theorem problem_demo2_answer_correct :
-    (demo2Set.filter (fun n => n ≤ 3)).card = 3 := by
+opaque SatisfiesProblem : Triple → Prop
+
+def IsMinimalPerimeterSolution (t : Triple) : Prop :=
+  SatisfiesProblem t ∧ ∀ t' : Triple, SatisfiesProblem t' → perim t ≤ perim t'
+
+theorem problem_1pou23_answer_correct :
+    ∃! t : Triple, IsMinimalPerimeterSolution t ∧ (prod t % 100000 = 336) := by
   sorry
 ```
 
-EXAMPLE 3 (number theory / modular condition)
-Input:
+======================
+EXAMPLE 2 (explicit double sum + floor + 2-adic valuation + mod 5^7)
+INPUT:
+ID: 4ok56p
 
-* id: demo3
-* problem: "Find the smallest nonnegative integer x such that x ≡ 2 (mod 5) and x ≡ 3 (mod 7)."
-* candidate answer: 17
+Problem statement:
+Define a function $f \colon \mathbb{Z}*{\geq 1} \to \mathbb{Z}*{\geq 1}$ by
+$$
+f(n) = \sum_{i = 1}^n \sum_{j = 1}^n j^{1024} \left\lfloor\frac1j + \frac{n-i}{n}\right\rfloor.
+$$
+Let $M=2 \cdot 3 \cdot 5 \cdot 7 \cdot 11 \cdot 13$ and let $N = f(M^{15}) - f(M^{15}-1)$.
+Let $k$ be the largest non-negative integer such that $2^k$ divides $N$.
+What is the remainder when $2^k$ is divided by $5^7$?
 
-Output:
+Candidate integer answer: 32951
+
+OUTPUT:
+
+```lean4
+import Mathlib
+open BigOperators
+
+noncomputable def f (n : ℕ) : ℤ :=
+  ∑ i in Finset.Icc 1 n, ∑ j in Finset.Icc 1 n,
+    (j : ℤ) ^ (1024 : ℕ) *
+      Int.floor ((1 : ℝ) / (j : ℝ) + ((n - i : ℕ) : ℝ) / (n : ℝ))
+
+def M : ℕ := 2 * 3 * 5 * 7 * 11 * 13
+
+noncomputable def N : ℤ :=
+  f (M ^ (15 : ℕ)) - f ((M ^ (15 : ℕ)) - 1)
+
+noncomputable def k : ℕ :=
+  Nat.findGreatest (fun t : ℕ => (2 : ℤ) ^ t ∣ N) (Int.natAbs N)
+
+theorem problem_4ok56p_answer_correct :
+    (2 : ℕ) ^ k % (5 : ℕ) ^ (7 : ℕ) = 32951 := by
+  sorry
+```
+
+======================
+EXAMPLE 3 (tournament outcomes / counting orderings / 10-adic valuation)
+INPUT:
+ID: 4p48y2
+
+Problem statement:
+A tournament is held with $2^{20}$ runners each of which has a different running speed. In each race,
+two runners compete against each other with the faster runner always winning the race. The competition
+consists of $20$ rounds with each runner starting with a score of $0$. In each round, the runners are paired
+in such a way that in each pair, both runners have the same score at the beginning of the round. The winner
+of each race in the $i^{\text{th}}$ round receives $2^{20-i}$ points and the loser gets no points.
+
+At the end of the tournament, we rank the competitors according to their scores. Let $N$ denote the number
+of possible orderings of the competitors at the end of the tournament. Let $k$ be the largest positive integer
+such that $10^k$ divides $N$. What is the remainder when $k$ is divided by $10^{5}$?
+
+Candidate integer answer: 21818
+
+OUTPUT:
 
 ```lean4
 import Mathlib
 
-theorem problem_demo3_answer_correct :
-    IsLeast {x : ℕ | x ≡ 2 [ZMOD 5] ∧ x ≡ 3 [ZMOD 7]} 17 := by
+abbrev Runner := Fin (2 ^ (20 : ℕ))
+abbrev ScoreVec := Runner → ℕ
+
+opaque TournamentOutcomePossible : ScoreVec → Prop
+
+opaque Ordering : Type
+opaque orderingOfScores : ScoreVec → Ordering
+
+def N : ℕ :=
+  Nat.card { o : Ordering // ∃ s : ScoreVec, TournamentOutcomePossible s ∧ orderingOfScores s = o }
+
+noncomputable def k : ℕ :=
+  Nat.findGreatest (fun t : ℕ => (10 : ℕ) ^ t ∣ N) N
+
+theorem problem_4p48y2_answer_correct :
+    k % 100000 = 21818 := by
   sorry
 ```
 
-Remember:
+Now do the same for the real input:
 
-* Exactly one theorem/lemma total.
-* Exactly one `sorry`.
-* Final response is only the single `lean4` block.
-""".strip()
+* Keep the input’s ID and candidate answer A.
+* Decide between (A) explicit arithmetic vs (B) opaque-spec certificate.
+* Output only one `lean4` block with exactly one theorem/lemma and exactly one `sorry`.
+  """.strip()
+
 
 def build_user_prompt(problem_id: str, problem_text: str, candidate_answer: int, raw_solution: str | None = None) -> str:
-    """
-    User prompt with lightweight “scaffolding” to encourage a good certificate theorem.
-
-    We do NOT require the model to use raw_solution, but including a short excerpt can help.
-    """
-    raw_solution_section = ""
-    if raw_solution:
-        raw_solution_section = (
-            "A previous attempt (may be wrong, for context only):\n"
-            f"{raw_solution}\n\n"
-        )
-
+    # raw_solution_section = ""
+    # if raw_solution:
+    #     raw_solution_section = (
+    #         "Solution (may be wrong, for context only):\n"
+    #         f"{raw_solution}\n\n"
+    #     )
     return (
         f"ID: {problem_id}\n\n"
         f"Problem statement:\n{problem_text}\n\n"
-        f"Candidate integer answer: {candidate_answer}\n\n"
-        f"{raw_solution_section}"
-        "Task:\n"
-        "Produce Lean 4 code that contains exactly ONE theorem named:\n"
-        f"  problem_{problem_id}_answer_correct\n\n"
-        "The theorem must be a correctness certificate: if proven, it would imply that the candidate integer answer is correct.\n\n"
-        "Mandatory output format:\n"
-        "- Your entire response must be exactly one markdown fenced code block:\n"
-        "  ```lean4\n"
-        "  ...\n"
-        "  ```\n"
-        "- No text outside the code block.\n\n"
-        "Mandatory constraints:\n"
-        "- Exactly one theorem/lemma in the file.\n"
-        "- Exactly one occurrence of `sorry`, at the end of that theorem proof.\n"
-        "- Add imports (prefer `import Mathlib`) and any necessary defs, but no extra lemmas.\n"
-        "- End the theorem with `:= by sorry` (or `:= by` then `sorry` on next line).\n\n"
-        "Suggestion (not required):\n"
-        "- If the problem asks for a number of objects, define the set/Finset and state its `card = <candidate>`.\n"
-        "- If it asks for a value of an expression, state that expression equals `<candidate>` in ℤ/ℕ/ℚ/ℝ.\n"
-        "- If it asks for smallest/largest such integer, use `IsLeast` / `IsGreatest`.\n"
+        f"Candidate integer answer: {candidate_answer}\n"
     )
 
 def generate_theorem_once(
@@ -596,7 +639,7 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--min_p", type=float, default=0.02)
     ap.add_argument("--top_logprobs", type=int, default=0)
-    ap.add_argument("--max_new_tokens", type=int, default=2048)
+    ap.add_argument("--max_new_tokens", type=int, default=65536)
 
     # Prompt config
     ap.add_argument("--system_prompt_file", default=None, help="Optional path to a system prompt text file.")
