@@ -23,6 +23,7 @@ Notes for vLLM:
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -34,6 +35,7 @@ from pathlib import Path
 from openai import OpenAI
 from jinja2 import Environment
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -517,6 +519,34 @@ def get_next_run_dir(base_dir: Path) -> Path:
     return base_dir / f"run_{max_idx + 1}"
 
 
+def _preload_model_weights(model_path) -> None:
+    print(f'Loading model weights from {model_path} into OS Page Cache...')
+    start_time = time.time()
+    
+    files_to_load = []
+    total_size = 0
+
+    for root, _, files in os.walk(model_path):
+        for file_name in files:
+            file_path = os.path.join(root, file_name)
+
+            if os.path.isfile(file_path):
+                files_to_load.append(file_path)
+                total_size += os.path.getsize(file_path)
+
+    def _read_file(path: str) -> None:
+
+        with open(path, 'rb') as file_object:
+            while file_object.read(1024 * 1024 * 1024):
+                pass
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        list(executor.map(_read_file, files_to_load))
+
+    elapsed = time.time() - start_time
+    print(f'Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n')
+
+
 def main():
     ap = argparse.ArgumentParser(description="Goedel + Lean checking + self-correction (single-thread).")
 
@@ -539,7 +569,7 @@ def main():
     ap.add_argument("--base_url", default="http://0.0.0.0:8001/v1",
                     help="(vllm) If not starting server, connect here. Default matches --port 8001.")
     ap.add_argument("--server_log", default="vllm_goedel_server.log")
-    ap.add_argument("--server_timeout", type=int, default=180)
+    ap.add_argument("--server_timeout", type=int, default=240)
 
     # vLLM server tuning (defaults are conservative to coexist with another server on the same H100)
     ap.add_argument("--dtype", default="bfloat16",
@@ -561,12 +591,12 @@ def main():
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--repeat_penalty", type=float, default=None)
     ap.add_argument("--num_ctx", type=int, default=None, help="(ollama) Optional: num_ctx")
-    ap.add_argument("--num_predict", type=int, default=65536,
+    ap.add_argument("--num_predict", type=int, default=32768,
                     help="Max tokens to generate (ollama num_predict; vllm max_tokens).")
 
     # Template
     ap.add_argument("--template_path", default="goedel_template.jinja", help="Path to Jinja chat template")
-    ap.add_argument("--enable_thinking", action="store_true", help="If set, enables thinking blocks in template render")
+    ap.add_argument("--enable_thinking", action="store_true", help="If set, enables thinking blocks in template render (default: True)")
     ap.add_argument("--no_enable_thinking", dest="enable_thinking", action="store_false")
     ap.set_defaults(enable_thinking=True)
 
@@ -616,17 +646,10 @@ set_option maxHeartbeats 0
 open BigOperators Real Nat Topology Rat
 
 /-!
-# USA Mathematical Olympiad 2005, Problem 2
-
-Prove that there do not exist integers x,y,z such that
-
-        x⁶ + x³ + x³y + y = 147¹⁵⁷
-        x³ + x³y + y² + y + z⁹ = 157¹⁴⁷.
+Prove that 2 + 2 = 4
 -/
-theorem usa2005_p2 :
-    ¬∃ (x y z : ℤ),
-       x^6 + x^3 + x^3 * y + y = 147^157 ∧
-       x^3 + x^3 * y + y^2 + y + z^9 = 157^147 := by sorry
+theorem sample_theorem :
+    2 + 2 = 4 := by sorry
 """.strip()
 
     formal_statement = normalize_for_prompt(formal_statement)
@@ -639,6 +662,8 @@ theorem usa2005_p2 :
         if args.start_server:
             if not args.model_path:
                 raise ValueError("--model_path is required when --start_server is set (backend=vllm).")
+            
+            _preload_model_weights(model_path=args.model_path)
 
             scfg = VLLMServerConfig(
                 port=args.port,
