@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
-Single-thread Goedel pipeline + Lean 4 checking (Lake project w/ Mathlib) + self-correction.
+Concurrent Goedel pipeline + Lean 4 checking (Lake project w/ Mathlib) + self-correction.
 
 Backends (configurable):
-  - ollama: GGUF via Ollama (your current behavior)
-  - vllm  : HF weights via vLLM OpenAI-compatible server (NEW)
+  - ollama: GGUF via Ollama
+  - vllm  : HF weights via vLLM OpenAI-compatible server
 
-Workflow (unchanged logically):
+Workflow (same logic per prover):
   1) Build prompt via your Jinja chat template (HF-style apply_chat_template emulation).
   2) Generate Lean proof (expects ```lean4 ... ``` in model output).
   3) Splice generated proof into the original theorem statement (replacing `:= by sorry`).
-  4) Write a .lean file inside a Mathlib Lake project and compile/check with `lake env lean`.
+  4) Write a .lean file inside a Mathlib Lake project and compile/check with `lake env lean --json`.
   5) If it fails, format errors with <error>...</error> markers and self-correct for up to --max_rounds.
 
-Notes for vLLM:
-  - This script can start its own vLLM server (recommended) OR connect to an already running server.
-  - Default port is 8001 to avoid clashing with your conjecturing server on 8000.
-  - Default base_url targets that port: http://0.0.0.0:8001/v1
-  - Default --gpu-memory-utilization is conservative for Goedel 8B/32B to coexist with other workloads.
-    Adjust upward if Goedel is the only model on the GPU.
+New features:
+  - Run N concurrent provers (default 16).
+  - Run M concurrent Lean checks (default 16), independent of provers.
+  - Write prover-specific Lean files into a folder: <lean_relpath_folder>/GoedelRun_{i}.lean
+  - Save all prompts/outputs/errors into out_dir/prover_XX/...
+  - Write a global JSONL log: out_dir/events.jsonl
+  - Stop all other provers as soon as any prover yields a Lean-validated proof.
+  - Single-pass checker: always run `lean --json` once, parse JSON stdout.
+  - Treat "declaration uses 'sorry'" warnings as failure.
+  - Exact token counting with HF AutoTokenizer. If prompt_tokens + num_predict > max_model_len:
+      - do NOT send request (prevents vLLM crashes)
+      - restart that prover instance in its slot.
+  - Output controls:
+      - print_mode=one_stream: stream tokens only for one prover (configurable)
+      - print_mode=stats: periodically print aggregate stats for all provers
 """
 
 from __future__ import annotations
@@ -31,10 +40,13 @@ import json
 import ollama
 import argparse
 import subprocess
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from openai import OpenAI
 from jinja2 import Environment
 from dataclasses import dataclass
+from transformers import AutoTokenizer
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -239,12 +251,31 @@ class LeanCheckResult:
     json_errors: Optional[List[Dict[str, Any]]] = None
 
 
+def _is_sorry_warning(msg: Dict[str, Any]) -> bool:
+    """
+    Lean warning for sorry can appear as string or structured data depending on Lean version/plugins.
+    User requirement: severity == "warning" and data == "declaration uses 'sorry'".
+    We'll match exact string and also tolerate simple structured cases.
+    """
+    if msg.get("severity") != "warning":
+        return False
+    data = msg.get("data")
+    if data == "declaration uses 'sorry'":
+        return True
+    # tolerant fallback
+    if isinstance(data, str) and "declaration uses 'sorry'" in data:
+        return True
+    return False
+
+
 def run_lean_check(project_dir: Path, lean_file_rel: str, timeout_s: int = 120) -> LeanCheckResult:
     """
-    Runs Lean in a Lake env, capturing stderr/stdout.
-    Also tries to get structured errors using `lean --json`.
+    Runs Lean once with --json and parses stdout line-by-line.
+    Failure conditions:
+      - any severity == "error"
+      - any "declaration uses 'sorry'" warning
     """
-    cmd = ["lake", "env", "lean", lean_file_rel]
+    cmd = ["lake", "env", "lean", "-j", "12", "--json", lean_file_rel]
     try:
         p = subprocess.run(
             cmd,
@@ -257,42 +288,28 @@ def run_lean_check(project_dir: Path, lean_file_rel: str, timeout_s: int = 120) 
     except subprocess.TimeoutExpired as e:
         return LeanCheckResult(ok=False, stdout=e.stdout or "", stderr=(e.stderr or "") + "\n[TIMEOUT]\n")
 
-    ok = (p.returncode == 0)
+    errs: List[Dict[str, Any]] = []
+    sorry_warnings: List[Dict[str, Any]] = []
 
-    # Attempt a second pass with --json to extract structured errors (Lean supports `--json`).
-    json_errors = None
-    if not ok:
+    for line in p.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
         try:
-            cmd_json = ["lake", "env", "lean", "--json", lean_file_rel]
-            pj = subprocess.run(
-                cmd_json,
-                cwd=str(project_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout_s,
-            )
-            # Lean writes JSON messages to stdout line-by-line.
-            # We'll parse those and extract "error" severity items with pos/endPos.
-            errs = []
-            for line in pj.stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    msg = json.loads(line)
-                except Exception:
-                    continue
-                # Lean JSON format varies; common keys: "severity", "pos", "endPos", "data"
-                print(f"Got msg: {msg}")
-                if isinstance(msg, dict) and msg.get("severity") == "error":
-                    if "pos" in msg and "data" in msg:
-                        errs.append(msg)
-            if errs:
-                json_errors = errs
-        except Exception:
-            pass
+            msg = json.loads(line)
+        except Exception as e:
+            print(f"[err] exception when parsing lake --json: {e}\nline: {line}")
+        if not isinstance(msg, dict):
+            print(f"[warn] msg is not a dict: {msg}")
 
+        if msg.get("severity") == "error" and "pos" in msg and "data" in msg:
+            errs.append(msg)
+
+        if _is_sorry_warning(msg):
+            sorry_warnings.append(msg)
+
+    ok = (p.returncode == 0) and (len(errs) == 0) and (len(sorry_warnings) == 0)
+    json_errors = (errs + sorry_warnings) if (errs or sorry_warnings) else None
     return LeanCheckResult(ok=ok, stdout=p.stdout, stderr=p.stderr, json_errors=json_errors)
 
 
@@ -402,9 +419,10 @@ def vllm_generate_text(
     top_p: float,
     max_tokens: int,
     stream: bool = True,
+    print_stream: bool = True,
 ) -> str:
     """
-    OpenAI-compat completions endpoint (like your gpt-oss script, but using a raw prompt string).
+    OpenAI-compat completions endpoint (using a raw prompt string).
     """
     chunks: List[str] = []
     if not stream:
@@ -433,7 +451,8 @@ def vllm_generate_text(
             txt = ev.choices[0].text or ""
             if txt:
                 chunks.append(txt)
-                print(txt, end="", flush=True)
+                if print_stream:
+                    print(txt, end="", flush=True)
     finally:
         try:
             stream_iter.close()
@@ -445,14 +464,21 @@ def vllm_generate_text(
 
 # ----------------------------- Ollama generation -------------------------------
 
-def ollama_generate_text(model: str, prompt: str, options: Dict[str, Any], stream: bool = True) -> str:
+def ollama_generate_text(
+    model: str,
+    prompt: str,
+    options: Dict[str, Any],
+    stream: bool = True,
+    print_stream: bool = True,
+) -> str:
     chunks: List[str] = []
     if stream:
         for part in ollama.generate(model=model, prompt=prompt, options=options, stream=True):
             chunk = part.get("response", "")
             if chunk:
                 chunks.append(chunk)
-                print(chunk, end="", flush=True)
+                if print_stream:
+                    print(chunk, end="", flush=True)
     else:
         resp = ollama.generate(model=model, prompt=prompt, options=options, stream=False)
         chunks.append(resp.get("response", ""))
@@ -522,7 +548,7 @@ def get_next_run_dir(base_dir: Path) -> Path:
 def _preload_model_weights(model_path) -> None:
     print(f'Loading model weights from {model_path} into OS Page Cache...')
     start_time = time.time()
-    
+
     files_to_load = []
     total_size = 0
 
@@ -535,7 +561,6 @@ def _preload_model_weights(model_path) -> None:
                 total_size += os.path.getsize(file_path)
 
     def _read_file(path: str) -> None:
-
         with open(path, 'rb') as file_object:
             while file_object.read(1024 * 1024 * 1024):
                 pass
@@ -547,8 +572,84 @@ def _preload_model_weights(model_path) -> None:
     print(f'Processed {len(files_to_load)} files ({total_size / 1e9:.2f} GB) in {elapsed:.2f} seconds.\n')
 
 
+# ----------------------------- Logging + tokens --------------------------------
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+class JsonlLogger:
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def log(self, event: Dict[str, Any], print_event=False) -> None:
+        event = dict(event)
+        event.setdefault("ts", now_iso())
+        line = json.dumps(event, ensure_ascii=False)
+        with self._lock:
+            if print_event:
+                print(event)
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+
+def get_prover_out_dir(root: Path, prover_id: int) -> Path:
+    d = root / f"prover_{prover_id:02d}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def count_tokens(tok: AutoTokenizer, text: str) -> int:
+    return len(tok.encode(text, add_special_tokens=False))
+
+class ContextLimit(Exception):
+    pass
+
+def enforce_context_budget(tok: AutoTokenizer, prompt: str, max_new_tokens: int, max_model_len: int) -> Tuple[int, int]:
+    prompt_tokens = count_tokens(tok, prompt)
+    total = prompt_tokens + max_new_tokens
+    if total > max_model_len:
+        raise ContextLimit(
+            f"Context exceeded: prompt_tokens={prompt_tokens} + max_new_tokens={max_new_tokens} > max_model_len={max_model_len}"
+        )
+    return prompt_tokens, total
+
+
+# ----------------------------- Lean-check task ----------------------------------
+
+def lean_check_task(
+    task: Dict[str, Any],
+    *,
+    args: argparse.Namespace,
+    project_dir: Path,
+    global_log: JsonlLogger,
+) -> Dict[str, Any]:
+    prover_id = task["prover_id"]
+    r = task["round"]
+    relpath = task["relpath"]
+    prover_out = Path(task["prover_out"])
+
+    def log(ev: Dict[str, Any]) -> None:
+        ev = dict(ev)
+        ev.update({"prover_id": prover_id})
+        global_log.log(ev)
+
+    log({"event": "lean_check_start", "round": r, "relpath": relpath})
+    start = time.time()
+    check = run_lean_check(project_dir, relpath, timeout_s=args.lean_timeout)
+    dt = time.time() - start
+
+    (prover_out / f"round_{r}_lean_stdout.txt").write_text(check.stdout, encoding="utf-8")
+    (prover_out / f"round_{r}_lean_stderr.txt").write_text(check.stderr, encoding="utf-8")
+
+    log({"event": "lean_check_done", "round": r, "ok": check.ok, "seconds": dt})
+
+    task["lean_ok"] = check.ok
+    task["lean_result"] = check
+    return task
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Goedel + Lean checking + self-correction (single-thread).")
+    ap = argparse.ArgumentParser(description="Goedel + Lean checking + self-correction (concurrent).")
 
     # Backend selection
     ap.add_argument("--backend", choices=["ollama", "vllm"], default="vllm",
@@ -560,38 +661,40 @@ def main():
     # ---- vLLM backend args ----
     ap.add_argument("--start_server", action="store_true",
                     help="(vllm) Start a local vLLM OpenAI server.")
+    ap.add_argument("--stop_server", action="store_true",
+                    help="(vllm) Stop the local vLLM OpenAI server when finished.")
     ap.add_argument("--model_path", default="",
                     help="(vllm) Path for vLLM --model (required if --start_server).")
     ap.add_argument("--served_model_name", default="goedel",
                     help="(vllm) Name exposed by vLLM (used in OpenAI calls).")
     ap.add_argument("--port", type=int, default=8001,
-                    help="(vllm) Server port. Default 8001 to avoid your 8000 conjecture server.")
+                    help="(vllm) Server port. Default 8001 to avoid clashing with other servers.")
     ap.add_argument("--base_url", default="http://0.0.0.0:8001/v1",
                     help="(vllm) If not starting server, connect here. Default matches --port 8001.")
     ap.add_argument("--server_log", default="vllm_goedel_server.log")
     ap.add_argument("--server_timeout", type=int, default=240)
 
-    # vLLM server tuning (defaults are conservative to coexist with another server on the same H100)
+    # vLLM server tuning
     ap.add_argument("--dtype", default="bfloat16",
                     help="(vllm) --dtype. Default bfloat16 for H100.")
     ap.add_argument("--kv_cache_dtype", default="fp8_e4m3",
                     help="(vllm) --kv-cache-dtype. Default fp8_e4m3 for H100.")
     ap.add_argument("--max_model_len", type=int, default=40960,
-                    help="(vllm) --max-model-len. Default 40960.")
+                    help="(vllm/overall) Max model context length used for exact token checks. Default 40960.")
     ap.add_argument("--gpu_memory_utilization", type=float, default=0.96,
-                    help="(vllm) --gpu-memory-utilization. Default 0.35 (coexist-friendly on H100).")
+                    help="(vllm) --gpu-memory-utilization. Default 0.96.")
     ap.add_argument("--max_num_seqs", type=int, default=32,
-                    help="(vllm) --max-num-seqs. Default 32 for a single-thread pipeline.")
+                    help="(vllm) --max-num-seqs. Default 32.")
     ap.add_argument("--stream_interval", type=int, default=200)
     ap.add_argument("--enable_prefix_caching", action="store_true")
 
     # Generation params (used by both backends)
     ap.add_argument("--seed", type=int, default=30)
-    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--temperature", type=float, default=0.6)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--repeat_penalty", type=float, default=None)
     ap.add_argument("--num_ctx", type=int, default=None, help="(ollama) Optional: num_ctx")
-    ap.add_argument("--num_predict", type=int, default=32768,
+    ap.add_argument("--num_predict", type=int, default=16392,
                     help="Max tokens to generate (ollama num_predict; vllm max_tokens).")
 
     # Template
@@ -602,7 +705,8 @@ def main():
 
     # Lean project
     ap.add_argument("--project_dir", default="/Users/mila/lean/mathlib4", help="Lake project directory")
-    ap.add_argument("--lean_relpath", default="GoedelRun.lean", help="Lean file path relative to project_dir")
+    ap.add_argument("--lean_relpath_folder", default="GoedelRuns",
+                    help="Folder (relative to project_dir) where GoedelRun_{i}.lean are written")
     ap.add_argument("--lean_timeout", type=int, default=120)
 
     # Pipeline
@@ -610,6 +714,21 @@ def main():
     ap.add_argument("--error_thres", action="store_true", help="Show at most 8 errors to the agent")
     ap.add_argument("--no_error_thres", dest="error_thres", action="store_false")
     ap.set_defaults(error_thres=True)
+
+    # Concurrency
+    ap.add_argument("--num_provers", type=int, default=16, help="Number of concurrent provers")
+    ap.add_argument("--prover_workers", type=int, default=16, help="Number of concurrent prover workers (usually = num_provers)")
+    ap.add_argument("--lean_workers", type=int, default=16, help="Number of concurrent lean check workers")
+
+    # Output / verbosity
+    ap.add_argument("--print_mode", choices=["one_stream", "stats"], default="one_stream",
+                    help="one_stream: stream tokens only for one prover; stats: periodic aggregated stats")
+    ap.add_argument("--stream_prover_id", type=int, default=0, help="Which prover id to stream/print in one_stream mode")
+    ap.add_argument("--stats_interval_s", type=float, default=2.0, help="Stats print interval when print_mode=stats")
+
+    # Token counting
+    ap.add_argument("--tokenizer_path", default="",
+                    help="HF tokenizer path (local dir). If empty and backend=vllm with --start_server, defaults to --model_path.")
 
     # Inputs/outputs
     ap.add_argument("--statement_file", default=None, help="Path to a .lean file containing theorem statement with := by sorry")
@@ -619,6 +738,11 @@ def main():
 
     out_dir = get_next_run_dir(Path(args.out_dir).expanduser().resolve())
     ensure_dir(out_dir)
+
+    global_log = JsonlLogger(out_dir / "events.jsonl")
+    stop_event = threading.Event()
+    winner_lock = threading.Lock()
+    winner: Dict[str, Any] = {}
 
     project_dir = Path(args.project_dir).expanduser().resolve()
     if not project_dir.exists():
@@ -636,7 +760,6 @@ def main():
     if args.statement_file:
         formal_statement = Path(args.statement_file).expanduser().read_text(encoding="utf-8").strip()
     else:
-        # Default placeholder statement
         formal_statement = """
 import Mathlib
 import Aesop
@@ -656,13 +779,13 @@ theorem sample_theorem :
 
     # Backend setup
     vllm_server: Optional[VLLMServer] = None
-    vllm_client = None
+    vllm_client: Optional[OpenAI] = None
 
     if args.backend == "vllm":
         if args.start_server:
             if not args.model_path:
                 raise ValueError("--model_path is required when --start_server is set (backend=vllm).")
-            
+
             _preload_model_weights(model_path=args.model_path)
 
             scfg = VLLMServerConfig(
@@ -698,111 +821,287 @@ theorem sample_theorem :
     if args.num_predict is not None and args.backend == "ollama":
         ollama_options["num_predict"] = args.num_predict
 
-    # Run loop
-    round_messages = build_initial_messages(formal_statement)
-    prev_assistant_output = ""
-    best_pass_path: Optional[Path] = None
+    # Tokenizer for exact token counts
+    tokenizer_path = args.tokenizer_path
+    if not tokenizer_path and args.backend == "vllm" and args.model_path:
+        tokenizer_path = args.model_path
+    if not tokenizer_path:
+        raise ValueError("Need --tokenizer_path (or --model_path when starting vLLM) to do exact token counting.")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=True)
 
-    try:
-        for r in range(0, args.max_rounds + 1):
-            print(f"\n==============================")
-            print(f"Round {r} / {args.max_rounds}")
-            print(f"Backend: {args.backend}")
-            print(f"==============================")
+    # Stats
+    stats_lock = threading.Lock()
+    stats: Dict[str, int] = {"active": 0, "generated": 0, "checked": 0, "passed": 0, "restarted_ctx": 0, "restarted_other": 0}
+
+    def stats_inc(k: str, n: int = 1) -> None:
+        with stats_lock:
+            stats[k] = stats.get(k, 0) + n
+
+    def stats_printer():
+        while not stop_event.is_set():
+            with stats_lock:
+                snapshot = dict(stats)
+            print(f"[STATS] {snapshot}")
+            time.sleep(args.stats_interval_s)
+
+    t_stats = None
+    if args.print_mode == "stats":
+        t_stats = threading.Thread(target=stats_printer, daemon=True)
+        t_stats.start()
+
+    # Per-prover state
+    prover_state: Dict[int, Dict[str, Any]] = {}
+    # Pools
+    prover_pool = ThreadPoolExecutor(max_workers=args.prover_workers)
+    lean_pool = ThreadPoolExecutor(max_workers=args.lean_workers)
+
+    def submit_prover(prover_id: int, state: Optional[Dict[str, Any]] = None):
+        """
+        Submit exactly ONE generation attempt (for current round) for prover_id.
+        Lean checking happens in a separate pool.
+        """
+        if state is None:
+            state = {
+                "round_messages": build_initial_messages(formal_statement),
+                "round": 0,
+                "prev_assistant_output": "",
+            }
+        prover_state[prover_id] = state
+
+        def log(ev: Dict[str, Any]) -> None:
+            ev = dict(ev)
+            ev.update({"prover_id": prover_id})
+            global_log.log(ev)
+
+        def _one_step() -> Optional[Dict[str, Any]]:
+            if stop_event.is_set():
+                log({"event": "stopped", "reason": "global_stop"})
+                return None
+
+            prover_out = get_prover_out_dir(out_dir, prover_id)
+
+            r = state["round"]
+            log({"event": "round_start", "round": r, "backend": args.backend})
 
             rendered_prompt = render_with_template(
                 chat_template=chat_template,
-                messages=round_messages,
+                messages=state["round_messages"],
                 tools=None,
                 add_generation_prompt=True,
                 enable_thinking=args.enable_thinking,
             )
-            (out_dir / f"round_{r}_prompt.txt").write_text(rendered_prompt, encoding="utf-8")
+            (prover_out / f"round_{r}_prompt.txt").write_text(rendered_prompt, encoding="utf-8")
 
-            # Generate
+            # Exact context check BEFORE calling backend
+            prompt_toks, total_toks = enforce_context_budget(
+                tokenizer, rendered_prompt, int(args.num_predict), int(args.max_model_len)
+            )
+            log({"event": "tokens_ok", "round": r, "prompt_tokens": prompt_toks, "total_tokens": total_toks})
+
+            stream_this = (args.print_mode == "one_stream" and prover_id == args.stream_prover_id)
+
             start = time.time()
             if args.backend == "ollama":
-                model_text = ollama_generate_text(args.ollama_model, rendered_prompt, options=ollama_options, stream=True)
+                # Per-round seed variation
+                local_opts = dict(ollama_options)
+                local_opts["seed"] = args.seed + prover_id * 10_000 + r
+                model_text = ollama_generate_text(
+                    args.ollama_model,
+                    rendered_prompt,
+                    options=local_opts,
+                    stream=True,
+                    print_stream=stream_this,
+                )
             else:
                 assert vllm_client is not None
                 model_text = vllm_generate_text(
                     client=vllm_client,
                     served_model_name=args.served_model_name,
                     prompt=rendered_prompt,
-                    seed=args.seed + r,
+                    seed=args.seed + prover_id * 10_000 + r,
                     temperature=args.temperature,
                     top_p=args.top_p,
                     max_tokens=int(args.num_predict),
                     stream=True,
+                    print_stream=stream_this,
                 )
             dt = time.time() - start
 
-            (out_dir / f"round_{r}_model_output.txt").write_text(model_text, encoding="utf-8")
-            print(f"\n[Round {r}] Generation done in {dt:.2f}s, output saved.")
+            (prover_out / f"round_{r}_model_output.txt").write_text(model_text, encoding="utf-8")
+            log({"event": "generation_done", "round": r, "seconds": dt})
+            stats_inc("generated", 1)
 
-            prev_assistant_output = model_text
+            state["prev_assistant_output"] = model_text
 
             # Extract Lean code block
             code_block = extract_lean4_code_block(model_text)
             if not code_block:
-                print(f"[Round {r}] ERROR: no ```lean4``` block found. Stopping.")
-                break
+                log({"event": "no_code_block", "round": r})
+                return None
 
             # Splice proof into statement
             full_code = replace_statement_in_proof(formal_statement, code_block)
-            (out_dir / f"round_{r}_full_code.lean").write_text(full_code, encoding="utf-8")
+            (prover_out / f"round_{r}_full_code.lean").write_text(full_code, encoding="utf-8")
 
             if full_code.startswith("**Error**"):
-                print(f"[Round {r}] Splicing error: {full_code}")
-                break
+                log({"event": "splice_error", "round": r, "error": full_code[:5000]})
+                return None
 
-            # Write into Lake project and check
-            relpath = args.lean_relpath
-            lean_file_path = write_lean_file(project_dir, relpath, full_code)
-            print(f"[Round {r}] Wrote Lean file: {lean_file_path}")
+            # Write prover-specific Lean file in project folder
+            relpath = str(Path(args.lean_relpath_folder) / f"GoedelRun_{prover_id}.lean")
+            write_lean_file(project_dir, relpath, full_code)
+            log({"event": "lean_written", "round": r, "relpath": relpath})
 
-            check = run_lean_check(project_dir, relpath, timeout_s=args.lean_timeout)
-            (out_dir / f"round_{r}_lean_stdout.txt").write_text(check.stdout, encoding="utf-8")
-            (out_dir / f"round_{r}_lean_stderr.txt").write_text(check.stderr, encoding="utf-8")
+            return {
+                "prover_id": prover_id,
+                "round": r,
+                "relpath": relpath,
+                "full_code": full_code,
+                "round_messages": state["round_messages"],
+                "prev_assistant_output": state["prev_assistant_output"],
+                "prover_out": str(prover_out),
+            }
 
-            if check.ok:
-                print(f"[Round {r}] Lean check PASSED.")
-                best_pass_path = lean_file_path
-                break
+        return prover_pool.submit(_one_step)
 
-            print(f"[Round {r}] Lean check FAILED. Preparing correction prompt...")
+    prover_futs: Dict[Any, int] = {}
+    lean_futs: Dict[Any, int] = {}
 
-            # Build structured error feedback
-            if check.json_errors:
-                error_feedback = get_error_str(full_code, check.json_errors, error_thres=args.error_thres)
-            else:
-                stderr_lines = check.stderr.strip().splitlines()
-                clipped = stderr_lines[:2000]
-                error_feedback = "Lean stderr (clipped):\n```text\n" + "\n".join(clipped) + "\n```"
+    # Seed initial provers
+    for i in range(args.num_provers):
+        prover_futs[submit_prover(i, None)] = i
+    stats_inc("active", args.num_provers)
 
-            (out_dir / f"round_{r}_error_feedback.txt").write_text(error_feedback, encoding="utf-8")
+    global_log.log({
+        "event": "start",
+        "backend": args.backend,
+        "num_provers": args.num_provers,
+        "prover_workers": args.prover_workers,
+        "lean_workers": args.lean_workers,
+        "max_rounds": args.max_rounds,
+        "max_model_len": args.max_model_len,
+        "num_predict": args.num_predict,
+        "lean_relpath_folder": args.lean_relpath_folder,
+        "print_mode": args.print_mode,
+        "stream_prover_id": args.stream_prover_id,
+    })
 
-            if r >= args.max_rounds:
-                print(f"[Round {r}] Reached max rounds; stopping.")
-                break
+    try:
+        while (prover_futs or lean_futs) and not stop_event.is_set():
+            # 1) Drain completed prover generations -> submit lean checks
+            done_prover = [f for f in prover_futs if f.done()]
+            for f in done_prover:
+                pid = prover_futs.pop(f)
 
-            round_messages = build_correction_messages(
-                prev_messages=round_messages,
-                prev_assistant_output=prev_assistant_output,
-                error_feedback=error_feedback,
-                correction_round_num=r + 1,
-            )
+                try:
+                    task = f.result()
+                except ContextLimit as e:
+                    global_log.log({"event": "restart_due_to_context", "prover_id": pid, "error": str(e)}, print_event=True)
+                    stats_inc("restarted_ctx", 1)
+                    prover_futs[submit_prover(pid, None)] = pid
+                    continue
+                except Exception as e:
+                    global_log.log({"event": "prover_exception", "prover_id": pid, "error": str(e)}, print_event=True)
+                    stats_inc("restarted_other", 1)
+                    prover_futs[submit_prover(pid, None)] = pid
+                    continue
+
+                if task is None:
+                    # Structural failure -> restart fresh to keep concurrency constant
+                    global_log.log({"event": "prover_returned_none_restart", "prover_id": pid}, print_event=True)
+                    stats_inc("restarted_other", 1)
+                    prover_futs[submit_prover(pid, None)] = pid
+                    continue
+
+                lf = lean_pool.submit(lean_check_task, task, args=args, project_dir=project_dir, global_log=global_log)
+                lean_futs[lf] = pid
+
+            # 2) Drain completed lean checks -> winner or correction + resubmit
+            done_lean = [f for f in lean_futs if f.done()]
+            for lf in done_lean:
+                pid = lean_futs.pop(lf)
+                task = lf.result()
+                stats_inc("checked", 1)
+
+                check: LeanCheckResult = task["lean_result"]
+                r = task["round"]
+                prover_out = Path(task["prover_out"])
+
+                if check.ok:
+                    with winner_lock:
+                        if not winner:
+                            winner.update({
+                                "prover_id": pid,
+                                "round": r,
+                                "relpath": task["relpath"],
+                                "prover_out": str(prover_out),
+                            })
+                            global_log.log({"event": "winner", **winner})
+                            stats_inc("passed", 1)
+                            stop_event.set()
+                    break
+
+                # Build structured error feedback
+                if check.json_errors:
+                    error_feedback = get_error_str(task["full_code"], check.json_errors, error_thres=args.error_thres)
+                else:
+                    stderr_lines = check.stderr.strip().splitlines()
+                    clipped = stderr_lines[:2000]
+                    error_feedback = "Lean stderr (clipped):\n```text\n" + "\n".join(clipped) + "\n```"
+
+                (prover_out / f"round_{r}_error_feedback.txt").write_text(error_feedback, encoding="utf-8")
+                global_log.log({"event": "lean_failed", "prover_id": pid, "round": r})
+
+                # Resubmit prover with correction prompt if rounds remain; else restart fresh instance
+                if r < args.max_rounds:
+                    next_messages = build_correction_messages(
+                        prev_messages=task["round_messages"],
+                        prev_assistant_output=task["prev_assistant_output"],
+                        error_feedback=error_feedback,
+                        correction_round_num=r + 1,
+                    )
+                    st = prover_state.get(pid) or {}
+                    st["round_messages"] = next_messages
+                    st["round"] = r + 1
+                    st["prev_assistant_output"] = task["prev_assistant_output"]
+                    prover_futs[submit_prover(pid, st)] = pid
+                else:
+                    global_log.log({"event": "max_rounds_reached_restart", "prover_id": pid, "round": r}, print_event=True)
+                    stats_inc("restarted_other", 1)
+                    prover_futs[submit_prover(pid, None)] = pid
+
+            if not done_prover and not done_lean:
+                time.sleep(0.01)
 
     finally:
-        if vllm_server is not None:
+        # Stop everything
+        stop_event.set()
+
+        # Best-effort cancel futures
+        for f in list(prover_futs.keys()):
+            try:
+                f.cancel()
+            except Exception:
+                pass
+        for f in list(lean_futs.keys()):
+            try:
+                f.cancel()
+            except Exception:
+                pass
+
+        prover_pool.shutdown(wait=False, cancel_futures=True)
+        lean_pool.shutdown(wait=False, cancel_futures=True)
+
+        if vllm_server is not None and args.stop_server:
             vllm_server.stop()
 
     print("\n==============================")
-    if best_pass_path:
-        print(f"SUCCESS: Proof checked. File: {best_pass_path}")
+    if winner:
+        print(f"SUCCESS: Proof checked (no sorry). Winner prover={winner['prover_id']} round={winner['round']}")
+        print(f"Lean file: {project_dir / winner['relpath']}")
+        print(f"Outputs:  {winner['prover_out']}")
     else:
-        print(f"FAILED: No passing proof within {args.max_rounds} correction rounds.")
-        print(f"See logs in: {out_dir}")
+        print(f"FAILED: No passing proof found. See logs in: {out_dir}")
     print("==============================\n")
 
 
