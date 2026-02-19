@@ -46,9 +46,9 @@ class CFG:
         "2. EXPLORE: Consider multiple solution strategies. Think about relevant theorems, "
         "techniques, patterns, or analogous problems. Don't commit to one approach immediately.\n"
         "3. PLAN: Select the most promising approach and outline key steps before executing.\n"
-        "4. EXECUTE: Work through your solution methodically. Show all reasoning steps clearly.\n"
+        "4. EXECUTE: Work through your solution methodically. Show all reasoning steps clearly. Use Python when necessary.\n"
         "5. VERIFY: Check your answer by substituting back, testing edge cases, or using "
-        "alternative methods. Ensure logical consistency throughout.\n\n"
+        "alternative methods. Ensure logical consistency throughout. Use Python when necessary.\n\n"
 
         "# Mathematical Reasoning Principles:\n"
         "- Break complex problems into smaller, manageable sub-problems\n"
@@ -65,7 +65,9 @@ class CFG:
         "- Ensure dimensional consistency and reasonableness of the result\n\n"
 
         "# Tool Use (Python) — REQUIRED WHEN HELPFUL\n"
-        "You have access to a Python scratchpad. Use it proactively.\n\n"
+        "You have access to a Python scratchpad. "
+        "You should use it proactively multiple times in the problem solving process, "
+        "ending each significant solution step with an appropriate tool call, using the tool call to complete the solution step.\n\n"
         "You MUST use a ```python``` block at least once whenever:\n"
         "- You have complex calculations that would be error-prone by hand\n"
         "  (e.g., the problem involves arithmetic with multiple steps, fractions, large numbers, or modular arithmetic)\n"

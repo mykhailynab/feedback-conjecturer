@@ -1,3 +1,4 @@
+import numpy as np
 import os
 import json
 import math
@@ -9,6 +10,8 @@ import pandas as pd
 import polars as pl
 
 LOG_DIR = Path("aimo3_logs")
+# LOG_DIR = Path("aimo3_logs_20b")
+# LOG_DIR = Path("aimo3_logs_20b_12_24")
 REF_PATH = Path("reference.csv")
 
 ATTEMPTS_PATH = LOG_DIR / "attempts.jsonl"
@@ -292,60 +295,111 @@ def main():
 
     # ---------- correctness vs entropy / votes (if solutions has vote_summary) ----------
     print_section("Correctness correlations (if available)")
-    if len(solutions_pd) > 0:
-        df = solutions_pd.copy()
-        df["correct"] = df["is_correct_recomputed"].fillna(False)
+    sol_join = ref_pd.merge(attempts_pd, on="id", how="left", suffixes=("_ref", "_att"))
+    sol_join['correct'] = sol_join['true_answer'] == sol_join['attempt_answer']
+    sol_join = sol_join[~(sol_join["attempt_answer"].isna())]
 
-        # selected entropy correlation (note: lower entropy -> more confident)
-        if df["selected_entropy"].notna().any():
-            corr = df[["selected_entropy", "correct"]].dropna().corr().iloc[0,1]
-            print(f"Correlation(selected_entropy, correct): {corr:.3f}")
+    corr = sol_join[["entropy", "correct"]].dropna().corr().iloc[0,1]
+    print(f"Correlation(entropy, correct): {corr:.3f}")
+    # bucketed accuracy by entropy quantiles
+    tmp = sol_join[sol_join["entropy"].notna()].copy()
+    tmp["entropy_bucket"] = pd.qcut(tmp["entropy"], q=5, duplicates="drop")
+    bucket = (
+        tmp.groupby("entropy_bucket", observed=False)["correct"]
+            .agg(["mean", "count"])
+            .rename(columns={"mean": "acc"})
+    )
+    print("\nAccuracy by entropy bucket:")
+    print(bucket.to_string())
 
-            # bucketed accuracy by entropy quantiles
-            tmp = df[df["selected_entropy"].notna()].copy()
-            tmp["entropy_bucket"] = pd.qcut(tmp["selected_entropy"], q=5, duplicates="drop")
-            bucket = tmp.groupby("entropy_bucket", observed=False)["correct"].mean()
-            print("\nAccuracy by selected_entropy bucket:")
-            print(bucket.to_string())
-
-        # budget/time
-        if df["solve_elapsed_ms"].notna().any():
-            tmp = df[df["solve_elapsed_ms"].notna()].copy()
-            tmp["time_bucket"] = pd.qcut(tmp["solve_elapsed_ms"], q=5, duplicates="drop")
-            bucket = tmp.groupby("time_bucket", observed=False)["correct"].mean()
-            print("\nAccuracy by solve_elapsed_ms bucket:")
-            print(bucket.to_string())
-    else:
-        print("solutions.csv empty; skipping.")
+    tmp = sol_join[sol_join["response_length"].notna()].copy()
+    tmp["response_length_bucket"] = pd.qcut(tmp["response_length"], q=5, duplicates="drop")
+    bucket = (
+        tmp.groupby("response_length_bucket", observed=False)["correct"]
+            .agg(["mean", "count"])
+            .rename(columns={"mean": "acc"})
+    )
+    print("\nAccuracy by response_length bucket:")
+    print(bucket.to_string())
 
     # ---------- events timeline (optional) ----------
     print_section("Events timeline (optional)")
-    if len(events_pd) == 0:
-        print("events.jsonl not found or empty.")
+    print("Event counts:")
+    print(events_pd["event"].value_counts().to_string())
+
+    # estimate durations if problem_start/problem_end exist
+    if {"problem_start", "problem_end"} <= set(events_pd["event"].unique()):
+        # build per-id start/end
+        starts = events_pd[events_pd["event"] == "problem_start"][["ts","id"]].copy()
+        ends = events_pd[events_pd["event"] == "problem_end"][["ts","id"]].copy()
+
+        starts["ts"] = pd.to_datetime(starts["ts"], errors="coerce", utc=True)
+        ends["ts"] = pd.to_datetime(ends["ts"], errors="coerce", utc=True)
+
+        per = starts.merge(ends, on="id", how="inner", suffixes=("_start","_end"))
+        per["duration_s"] = (per["ts_end"] - per["ts_start"]).dt.total_seconds()
+        per["duration_m"] = ((per["ts_end"] - per["ts_start"]).dt.total_seconds() / 60).apply(np.floor).apply(int)
+        per["duration_s_remaining"] = (per["duration_s"] - per["duration_m"] * 60).apply(int)
+        per["duration"] = [f"{m:02d}:{s:02d}" for m, s in zip(per["duration_m"], per["duration_s_remaining"])]
+        per['fits'] = per['duration_s'] < 60*5
+
+        sol_join = ref_pd.merge(attempts_pd, on="id", how="left", suffixes=("_ref", "_att"))
+        sol_join['correct'] = sol_join['true_answer'] == sol_join['attempt_answer']
+        id_allna = sol_join.groupby('id')['attempt_answer'].agg(lambda x: pd.isna(x).all())
+        id_allna = id_allna[id_allna].index.to_list()
+        id_accs = sol_join[~(sol_join["attempt_answer"].isna())].groupby('id')['correct'].mean().rename('acc')
+        id_lengths = sol_join.groupby('id')['response_length'].mean().rename('response_length_mean').astype(int)
+        id_accs = pd.concat([id_accs, pd.DataFrame(data = {id_accs.name: [0] * len(id_allna)}, index=id_allna)])
+        id_count_ans = sol_join.groupby('id')['attempt_answer'].agg(lambda x: (~(pd.isna(x))).sum()).rename("count_ans")
+        id_count_na = sol_join.groupby('id')['attempt_answer'].agg(lambda x: (pd.isna(x)).sum()).rename("count_na")
+        stats_df = pd.concat([id_accs, id_lengths, id_count_ans, id_count_na], axis=1).reset_index().rename(columns={'index': 'id'})
+        stats_df['na_part'] = stats_df['count_na'] / (stats_df['count_na'] + stats_df['count_ans'])
+        per = per.merge(stats_df, on='id')
+
+        print("\nPer-problem duration (from events):")
+        per = per.sort_values(by=['acc', 'duration_s'], ascending=[False, True])
+        print(per[['id', 'duration', 'fits', 'acc', 'response_length_mean', 'na_part', 'count_ans', 'count_na']])
+        print("\nPer-problem duration stats (from events):")
+        print(per["duration_s"].describe().to_string())
+
+        per.to_csv(OUT_DIR / "per_id_event_durations.csv", index=False, encoding="utf-8")
+        print(f"Saved: {OUT_DIR/'per_id_event_durations.csv'}")
+
+    # ---------- print raw_output for a successful attempt on a specific id ----------
+    print_section("Raw LLM output for a successful attempt (id=641659)")
+
+    target_id = "641659"
+    if "raw_output" not in attempts_pd.columns:
+        print("attempts.jsonl has no 'raw_output' column.")
     else:
-        if "event" not in events_pd.columns:
-            print("events.jsonl missing 'event' column.")
+        cand = attempts_pd[
+            (attempts_pd["id"] == target_id) &
+            (attempts_pd["attempt_answer"].notna())
+        ].copy()
+
+        if len(cand) == 0:
+            print(f"No attempts found for id={target_id} with a non-NA attempt_answer.")
         else:
-            print("Event counts:")
-            print(events_pd["event"].value_counts().to_string())
+            # pick a representative one (lowest entropy if available; else first row)
+            if cand["entropy"].notna().any():
+                row = cand.sort_values("entropy", ascending=True).iloc[0]
+            else:
+                row = cand.iloc[0]
 
-            # estimate durations if problem_start/problem_end exist
-            if {"problem_start", "problem_end"} <= set(events_pd["event"].unique()):
-                # build per-id start/end
-                starts = events_pd[events_pd["event"] == "problem_start"][["ts","id"]].copy()
-                ends = events_pd[events_pd["event"] == "problem_end"][["ts","id"]].copy()
-
-                # parse ts
-                starts["ts"] = pd.to_datetime(starts["ts"], errors="coerce", utc=True)
-                ends["ts"] = pd.to_datetime(ends["ts"], errors="coerce", utc=True)
-
-                per = starts.merge(ends, on="id", how="inner", suffixes=("_start","_end"))
-                per["duration_s"] = (per["ts_end"] - per["ts_start"]).dt.total_seconds()
-                print("\nPer-problem durations (from events):")
-                print(per["duration_s"].describe().to_string())
-
-                per.to_csv(OUT_DIR / "per_id_event_durations.csv", index=False, encoding="utf-8")
-                print(f"Saved: {OUT_DIR/'per_id_event_durations.csv'}")
+            print(f"id={row['id']} attempt={row.get('attempt')} "
+                  f"attempt_answer={row.get('attempt_answer')} "
+                  f"status={row.get('status')} finish_reason={row.get('finish_reason')} "
+                  f"entropy={row.get('entropy')} response_length={row.get('response_length')}")
+            print("\n--- raw_output ---")
+            print(row["raw_output"])
+            print("--- end raw_output ---")
+            print("\n--- tool_calls ---")
+            for tool_call in row["tool_calls"]:
+                print('\n\nCODE\n\n')
+                print(tool_call['code'])
+                print('\n\nOUTPUT\n\n')
+                print(tool_call['output'])
+            print("--- end tool_calls ---")
 
     print_section("Done")
     print(f"Artifacts written to: {OUT_DIR}")

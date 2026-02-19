@@ -39,8 +39,9 @@ import time
 import json
 import ollama
 import argparse
-import subprocess
+import traceback
 import threading
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from openai import OpenAI
@@ -286,7 +287,7 @@ def run_lean_check(project_dir: Path, lean_file_rel: str, timeout_s: int = 120) 
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as e:
-        return LeanCheckResult(ok=False, stdout=e.stdout or "", stderr=(e.stderr or "") + "\n[TIMEOUT]\n")
+        return LeanCheckResult(ok=False, stdout=str(e.stdout or ""), stderr=str(e.stderr or "") + "\n[TIMEOUT]\n")
 
     errs: List[Dict[str, Any]] = []
     sorry_warnings: List[Dict[str, Any]] = []
@@ -410,7 +411,7 @@ class VLLMServer:
 
 
 def vllm_generate_text(
-    client: "OpenAI",
+    client: OpenAI,
     served_model_name: str,
     prompt: str,
     *,
@@ -589,6 +590,7 @@ class JsonlLogger:
         line = json.dumps(event, ensure_ascii=False)
         with self._lock:
             if print_event:
+                print()
                 print(event)
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
@@ -841,7 +843,7 @@ theorem sample_theorem :
         while not stop_event.is_set():
             with stats_lock:
                 snapshot = dict(stats)
-            print(f"[STATS] {snapshot}")
+            print(f"[STATS {now_iso()}] {snapshot}", end='      \r', flush=True)
             time.sleep(args.stats_interval_s)
 
     t_stats = None
@@ -868,14 +870,14 @@ theorem sample_theorem :
             }
         prover_state[prover_id] = state
 
-        def log(ev: Dict[str, Any]) -> None:
+        def log(ev: Dict[str, Any], print_event: bool = False) -> None:
             ev = dict(ev)
             ev.update({"prover_id": prover_id})
-            global_log.log(ev)
+            global_log.log(ev, print_event=print_event)
 
         def _one_step() -> Optional[Dict[str, Any]]:
             if stop_event.is_set():
-                log({"event": "stopped", "reason": "global_stop"})
+                log({"event": "stopped", "reason": "global_stop"}, print_event=True)
                 return None
 
             prover_out = get_prover_out_dir(out_dir, prover_id)
@@ -936,7 +938,7 @@ theorem sample_theorem :
             # Extract Lean code block
             code_block = extract_lean4_code_block(model_text)
             if not code_block:
-                log({"event": "no_code_block", "round": r})
+                log({"event": "no_code_block", "round": r}, print_event=True)
                 return None
 
             # Splice proof into statement
@@ -944,7 +946,7 @@ theorem sample_theorem :
             (prover_out / f"round_{r}_full_code.lean").write_text(full_code, encoding="utf-8")
 
             if full_code.startswith("**Error**"):
-                log({"event": "splice_error", "round": r, "error": full_code[:5000]})
+                log({"event": "splice_error", "round": r, "error": full_code[:5000]}, print_event=True)
                 return None
 
             # Write prover-specific Lean file in project folder
@@ -996,12 +998,12 @@ theorem sample_theorem :
                 try:
                     task = f.result()
                 except ContextLimit as e:
-                    global_log.log({"event": "restart_due_to_context", "prover_id": pid, "error": str(e)}, print_event=True)
+                    global_log.log({"event": "restart_due_to_context", "prover_id": pid, "error": f"{e}, {e.__class__}"}, print_event=True)  # "traceback": traceback.format_exc()
                     stats_inc("restarted_ctx", 1)
                     prover_futs[submit_prover(pid, None)] = pid
                     continue
                 except Exception as e:
-                    global_log.log({"event": "prover_exception", "prover_id": pid, "error": str(e)}, print_event=True)
+                    global_log.log({"event": "prover_exception", "prover_id": pid, "error": f"{e}, {e.__class__}"}, print_event=True)  # "traceback": traceback.format_exc()
                     stats_inc("restarted_other", 1)
                     prover_futs[submit_prover(pid, None)] = pid
                     continue
@@ -1071,7 +1073,7 @@ theorem sample_theorem :
                     prover_futs[submit_prover(pid, None)] = pid
 
             if not done_prover and not done_lean:
-                time.sleep(0.01)
+                time.sleep(0.1)
 
     finally:
         # Stop everything
