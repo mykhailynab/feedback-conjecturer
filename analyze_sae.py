@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import argparse
 import numpy as np
 from scipy import sparse
@@ -28,7 +29,15 @@ def main():
     ap.add_argument("--feature_limit", type=int, default=None, help="Optional: only analyze first N features (debug)")
     ap.add_argument("--value_percentiles", type=str, default="0,1,5,10,25,50,75,90,95,99,100",
                     help="Percentiles for activation value stats (comma-separated)")
+    ap.add_argument("--enhance-meta-in-json", type=str, default=None, help="Path to JSON where to enhance per-feature meta in")
+    ap.add_argument("--enhance-meta-in-json-out", type=str, default=None, help="Output JSON path")
+    ap.add_argument("--enhance-meta-in-json-topk", type=int, default=2000, help="Top K features to consider enhancing")
     args = ap.parse_args()
+
+    enhance_meta_json = None
+    if args.enhance_meta_in_json is not None:
+        assert args.enhance_meta_in_json_out is not None, "Must specify --enhance-meta-in-json-out"
+        enhance_meta_json = json.loads(open(args.enhance_meta_in_json, 'r').read())
 
     csr: sparse.csr_matrix = sparse.load_npz(args.npz).tocsr()
 
@@ -61,6 +70,27 @@ def main():
     # Usage rate = nnz / n_rows (prob feature active on a random token)
     usage_rate = nnz_per_feat / float(n_rows) if n_rows else np.zeros_like(nnz_per_feat, dtype=np.float64)
 
+    if enhance_meta_json is not None:
+        top_idx, top_vals = topk_idx_vals(
+            nnz_per_feat.astype(np.float64), args.enhance_meta_in_json_topk
+        )
+        n_set = 0
+        for i, (fid, cnt) in enumerate(zip(top_idx, top_vals), start=1):
+            rate = usage_rate[fid]
+            mwa = mean_when_active[fid]
+            mpf = mean_per_feat[fid]
+            if str(fid) not in enhance_meta_json['features']:
+                continue
+            enhance_meta_json['features'][str(fid)]['mention_rate'] = float(rate)
+            enhance_meta_json['features'][str(fid)]['nnz_count'] = int(cnt)
+            enhance_meta_json['features'][str(fid)]['mean_when_active'] = float(mwa)
+            enhance_meta_json['features'][str(fid)]['mean_all'] = float(mpf)
+            n_set += 1
+        if len(enhance_meta_json['features']) > n_set:
+            print(f'[warn] Not all features set: set {n_set} < {len(enhance_meta_json["features"])} features')
+        print(f"Writing '{args.enhance_meta_in_json_out}'...")
+        open(args.enhance_meta_in_json_out, 'w').write(json.dumps(enhance_meta_json, ensure_ascii=False, indent=2))
+
     # ---- Print headline stats ----
     print("\n=== Matrix summary ===")
     print(f"File: {args.npz}")
@@ -73,9 +103,11 @@ def main():
 
     # ---- Top features by usage count ----
     print("\n=== Top features by usage frequency (nnz count) ===")
+    analyse_activations = set()
     top_idx, top_vals = topk_idx_vals(nnz_per_feat.astype(np.float64), args.topk)
     for i, (fid, cnt) in enumerate(zip(top_idx, top_vals), start=1):
         rate = usage_rate[fid]
+        analyse_activations.add(fid)
         print(f"{i:>3}. feature {fid:>7}  nnz={int(cnt):>10}  rate={rate:.6f}")
 
     # ---- Top features by mean activation (zeros included) ----
@@ -84,20 +116,24 @@ def main():
     for i, (fid, m) in enumerate(zip(top_idx, top_vals), start=1):
         cnt = nnz_per_feat[fid]
         mwa = mean_when_active[fid]
+        analyse_activations.add(fid)
         print(f"{i:>3}. feature {fid:>7}  mean={m:.6e}  nnz={cnt:>10}  mean_when_active={mwa:.6e}")
+
+    print("Activations to analyse:")
+    open("top_features.txt", 'w').write("\n".join(map(str, analyse_activations)))
 
     # ---- Percentile stats ----
     print("\n=== Percentile stats: usage frequency ===")
-    print(percentile_summary(nnz_per_feat.astype(np.float64), "nnz_per_feature"))
+    print(percentile_summary(nnz_per_feat.astype(np.float64), "# times activated (per feature)"))
     print()
-    print(percentile_summary(usage_rate.astype(np.float64), "usage_rate (nnz / n_rows)"))
+    print(percentile_summary(usage_rate.astype(np.float64), "usage rate per feature"))
 
     print("\n=== Percentile stats: activation strength ===")
-    print(percentile_summary(mean_per_feat.astype(np.float64), "mean_activation (zeros included)"))
+    print(percentile_summary(mean_per_feat.astype(np.float64), "mean activation per feature (zeros included)"))
     print()
     # conditional means can be informative but ignore dead features
     if active_mask.any():
-        print(percentile_summary(mean_when_active[active_mask].astype(np.float64), "mean_when_active (nnz>0 only)"))
+        print(percentile_summary(mean_when_active[active_mask].astype(np.float64), "mean activation per feature (only non-zero)"))
     else:
         print("mean_when_active: no active features (all dead)")
 
@@ -105,20 +141,22 @@ def main():
     val_ps = tuple(int(x) for x in args.value_percentiles.split(",") if x.strip() != "")
     if csr.nnz > 0:
         data = csr.data.astype(np.float64)
-        print("\n=== Nonzero activation value distribution (GLOBAL, csr.data) ===")
-        print(f"nonzero values: count={data.size:,}  min={data.min():.6e}  max={data.max():.6e}  mean={data.mean():.6e}")
+        print("\n=== Nonzero activation value distribution (global) ===")
+        print(f"nonzero values: count={data.size:,}  min={data.min():.6}  max={data.max():.6}  mean={data.mean():.6}")
         qs = np.percentile(data, val_ps)
         for p, q in zip(val_ps, qs):
-            print(f"  p{p:>3}: {q:.6e}")
+            print(f"  p{p:>3}: {q:.6}")
 
     # ---- Concentration: how much mass in top-K features ----
     total_mass = sums_per_feat.sum()
     if total_mass > 0:
-        for K in (10, 50, 100, 500, 1000):
-            K = min(K, n_feat)
-            top_idx, top_sums = topk_idx_vals(sums_per_feat, K)
+        print()
+        for num_top_feats in (10, 50, 100, 500, 1000, 2000, 5000, 10000, 20000, 50000):
+            num_top_feats = min(num_top_feats, n_feat)
+            top_idx, top_sums = topk_idx_vals(sums_per_feat, num_top_feats)
             share = top_sums.sum() / total_mass
-            print(f"\nMass concentration: top-{K} features account for {share*100:.2f}% of total activation mass")
+            print(f"Mass concentration: top-{num_top_feats} ({num_top_feats/n_feat*100:.2f}%) features account for {share*100:.2f}% of total activation mass")
+        print()
     else:
         print("\nMass concentration: total activation mass is 0 (all entries are zero).")
 

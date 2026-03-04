@@ -3,3 +3,5 @@ aimo3_logs.zip
 aimo3_logs/
 ignore/
 .DS_Store
+data/
+logs/

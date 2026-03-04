@@ -1,20 +1,26 @@
-import sys
 import os
-import subprocess
 import gc
 import re
+import sys
+import csv
+import json
 import math
 import time
 import queue
 import threading
-import contextlib
-from typing import Optional
-from jupyter_client import KernelManager
-from collections import Counter, defaultdict
-from concurrent.futures import as_completed, ThreadPoolExecutor
+import subprocess
 import pandas as pd
 import polars as pl
+from pathlib import Path
 from openai import OpenAI
+from typing import Optional
+from transformers import set_seed
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from jupyter_client import KernelManager
+from collections import Counter, defaultdict
+import kaggle_evaluation.aimo_3_inference_server
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from openai_harmony import (
     HarmonyEncodingName, 
     load_harmony_encoding, 
@@ -27,13 +33,6 @@ from openai_harmony import (
     TextContent, 
     Conversation
 )
-from transformers import set_seed
-import kaggle_evaluation.aimo_3_inference_server
-from pathlib import Path
-import json
-import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
 
 
 
@@ -241,9 +240,6 @@ class RunLogger:
 
             # vote summary (json-ish)
             "vote_summary",
-
-            # raw selected solution (can be large)
-            "selected_raw_output",
         ]
         with open(self.solutions_path, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(header)
@@ -288,8 +284,6 @@ class RunLogger:
             rr = dict(r)
             rr["ts"] = ts
             rr["summary"] = summary
-            # avoid exploding jsonl if raw_output is enormous (still keep it, but you can truncate)
-            rr["raw_output"] = self._safe_str(rr.get("raw_output", ""), max_len=200000)
             enriched.append(rr)
 
         with self._lock:
@@ -311,7 +305,6 @@ class RunLogger:
         is_correct: Optional[bool],
         selected_attempt: Optional[int],
         selected_entropy: Optional[float],
-        selected_raw_output: str,
 
         # OPTIONAL extras (you can pass these from artifact; safe to omit)
         budget_seconds: Optional[float] = None,
@@ -326,9 +319,6 @@ class RunLogger:
         finish_reason_counts: Optional[dict] = None,
         vote_summary: Optional[dict] = None,
     ):
-        # truncate raw output for csv sanity (keeps full in attempts.jsonl already)
-        raw = self._safe_str(selected_raw_output, max_len=200000)
-
         row = [
             id_value,
             pred_answer, true_answer, is_correct,
@@ -338,8 +328,7 @@ class RunLogger:
             attempts_total, attempts_with_answer,
             attempts_selected, attempts_rejected,
             json.dumps(finish_reason_counts or {}, ensure_ascii=False),
-            json.dumps(vote_summary or {}, ensure_ascii=False),
-            raw
+            json.dumps(vote_summary or {}, ensure_ascii=False)
         ]
 
         with self._lock:
@@ -521,17 +510,22 @@ class AIMO3Sandbox:
         return stdout if stdout.strip() else '[WARN] No output. Use print() to see results.'
 
     def close(self):
-
-        with contextlib.suppress(Exception):
+        try:
             if self._client:
                 self._client.stop_channels()
+        except Exception:
+            pass
 
         if self._owns_kernel and self._km is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._km.shutdown_kernel(now=True)
+            except Exception:
+                pass
 
-            with contextlib.suppress(Exception):
+            try:
                 self._km.cleanup_resources()
+            except Exception:
+                pass
 
     def reset(self):
         
@@ -586,6 +580,9 @@ class AIMO3Tool:
             return code
 
         if last_line.startswith('#'):
+            return code
+
+        if last_line.startswith(' '):
             return code
 
         lines[-1] = 'print(' + last_line + ')'
@@ -857,7 +854,6 @@ class AIMO3Solver:
     ) -> dict:
     
         # Always define these so we can safely return them
-        text_chunks: list[str] = []
         turn_traces = []  # list of dicts: {turn, prompt_ids, completion_ids, prompt_text, completion_text}
         full_completion_ids: list[int] = []  # concatenated across turns (assistant-side tokens only)
         tool_calls: list[dict] = []
@@ -874,7 +870,10 @@ class AIMO3Solver:
             return {
                 "Attempt": attempt_index + 1,
                 "Answer": None,
-                "Raw Output": "",
+                "Trace": {
+                    "turns": [],
+                    "full_completion_token_ids": [],
+                },
                 "Finish Reason": finish_reason,
                 "Python Calls": 0,
                 "Python Errors": 0,
@@ -888,7 +887,10 @@ class AIMO3Solver:
             return {
                 "Attempt": attempt_index + 1,
                 "Answer": None,
-                "Raw Output": "",
+                "Trace": {
+                    "turns": [],
+                    "full_completion_token_ids": [],
+                },
                 "Finish Reason": finish_reason,
                 "Python Calls": 0,
                 "Python Errors": 0,
@@ -942,8 +944,9 @@ class AIMO3Solver:
                         "return_token_ids": True
                     }
                 )
-    
-                token_buffer = []
+
+                token_buffer: list[int] = []
+                completion_text_parts: list[str] = []  # optional, only for fast boxed scan
                 try:
                     for chunk in stream:
                         if stop_event.is_set():
@@ -952,23 +955,26 @@ class AIMO3Solver:
                         if time.time() > deadline:
                             finish_reason = "deadline_exceeded"
                             break
-    
-                        new_tokens = chunk.choices[0].token_ids
+
+                        new_tokens = chunk.choices[0].token_ids or []
                         new_text = chunk.choices[0].text or ""
-    
+
+                        # Token IDs are the ground truth; text is optional convenience
                         if new_tokens:
                             token_buffer.extend(new_tokens)
+                            full_completion_ids.extend(new_tokens)
                             total_tokens += len(new_tokens)
-                            text_chunks.append(new_text)
 
-    
-                            chunk_logprobs = chunk.choices[0].logprobs
-                            if chunk_logprobs is not None and chunk_logprobs.top_logprobs:
-                                logprobs_buffer.extend(chunk_logprobs.top_logprobs)
-    
-                        # Fast scan when '}' appears (heuristic)
+                        if new_text:
+                            completion_text_parts.append(new_text)
+
+                        chunk_logprobs = chunk.choices[0].logprobs
+                        if chunk_logprobs is not None and chunk_logprobs.top_logprobs:
+                            logprobs_buffer.extend(chunk_logprobs.top_logprobs)
+
+                        # keep your fast scan heuristic, but scan the streamed text buffer (not your old text_chunks)
                         if "}" in new_text:
-                            search_text = "".join(text_chunks[-self.cfg.search_tokens:])
+                            search_text = "".join(completion_text_parts[-self.cfg.search_tokens:])
                             answer = self._scan_for_answer(search_text)
                             if answer is not None:
                                 final_answer = answer
@@ -976,6 +982,17 @@ class AIMO3Solver:
                                 break
                 finally:
                     stream.close()
+
+                # Decode what was actually sent/received in this turn
+                prompt_text = self._decode_ids(prompt_ids_this_turn)
+                completion_text = self._decode_ids(token_buffer)
+                turn_traces.append({
+                    "turn": _turn,
+                    "prompt_token_ids": prompt_ids_this_turn,
+                    "completion_token_ids": token_buffer,
+                    "prompt_text": prompt_text,
+                    "completion_text": completion_text,
+                })
     
                 if final_answer is not None:
                     break
@@ -1043,7 +1060,10 @@ class AIMO3Solver:
             "Python Errors": python_errors,
             "Entropy": mean_entropy,
             "Answer": final_answer,
-            "Raw Output": "".join(text_chunks),
+            "Trace": {
+                "turns": turn_traces,
+                "full_completion_token_ids": full_completion_ids,
+            },
             "Finish Reason": finish_reason,
             "Tool Calls": tool_calls,
         }
@@ -1180,6 +1200,13 @@ class AIMO3Solver:
                     pass
 
 
+
+
+
+
+
+
+
 set_seed(CFG.seed)
 
 if not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
@@ -1231,10 +1258,8 @@ def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataF
     selected_idx = artifact.get("selected_attempt_index", None)
 
     # Identify the selected attempt record (raw solution text) if possible
-    selected_raw = ""
     selected_entropy = None
     if selected_idx is not None and 0 <= selected_idx < len(attempts):
-        selected_raw = attempts[selected_idx].get("Raw Output", "")
         selected_entropy = attempts[selected_idx].get("Entropy", None)
 
     # Compute correctness
@@ -1272,7 +1297,7 @@ def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataF
             "python_calls": r.get("Python Calls", None),
             "python_errors": r.get("Python Errors", None),
             "finish_reason": finish_reason,
-            "raw_output": r.get("Raw Output", ""),
+            "trace": r.get("Trace", {}),
             "tool_calls": r.get("Tool Calls", []),
         })
 
@@ -1306,11 +1331,8 @@ def predict(id_: pl.DataFrame, question: pl.DataFrame, answer: Optional[pl.DataF
         is_correct=is_correct,
         selected_attempt=(attempts[selected_idx].get("Attempt") if selected_idx is not None and 0 <= selected_idx < len(attempts) else None),
         selected_entropy=selected_entropy,
-        selected_raw_output=selected_raw,
-    
         budget_seconds=artifact.get("budget_seconds"),
         deadline_ts=artifact.get("deadline_ts"),
-    
         attempts_total=attempts_total,
         attempts_with_answer=attempts_with_answer,
         attempts_selected=attempts_selected,

@@ -288,10 +288,10 @@ def main():
         raise RuntimeError("No usable sequences found in attempts.jsonl (missing trace/turns/token ids).")
 
     # --- Apply token budget (first N tokens across sequences) ---
-    # before_total = sum(len(s) for s in seqs)
+    before_total = sum(len(s) for s in seqs)
     seqs_cut, input_prompt_lens_cut = truncate_to_token_budget(seqs, input_prompt_lens, args.max_tokens)
-    # after_total = sum(len(s) for s in seqs_cut)
-    # print(f"Token budget: max_per_turn={args.max_tokens}, before={before_total}, after={after_total}, sequences={len(seqs_cut)}")
+    after_total = sum(len(s) for s in seqs_cut)
+    print(f"Token budget: max_per_turn={args.max_tokens}, before={before_total}, after={after_total}, sequences={len(seqs_cut)}")
 
     if not seqs_cut:
         raise RuntimeError("After applying --max_tokens, no tokens remain to process.")
