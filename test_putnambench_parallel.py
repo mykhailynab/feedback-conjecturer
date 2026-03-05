@@ -14,15 +14,15 @@ import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Any, Dict, List, Tuple
+from typing import Optional, Any, Dict, List, Tuple, Iterable
 
 import pandas as pd
 import polars as pl
 from openai import OpenAI
 from transformers import set_seed
 from jupyter_client import KernelManager
-from collections import Counter, defaultdict
-from concurrent.futures import as_completed, ThreadPoolExecutor
+from collections import defaultdict
+from concurrent.futures import as_completed, ThreadPoolExecutor, Future
 
 from openai_harmony import (
     HarmonyEncodingName,
@@ -59,14 +59,12 @@ class CFG:
     dtype: str = "auto"
     gpu_memory_utilization: float = 0.96
 
-    # Timeouts / budgets
-    high_problem_timeout: int = 900
-    base_problem_timeout: int = 300
-    notebook_limit: int = 17400
+    # Timeouts
     server_timeout: int = 180
     session_timeout: int = 960
     jupyter_timeout: int = 6
     sandbox_timeout: int = 3
+    attempt_timeout_seconds: int = 300
 
     # Decoding / sampling / batching
     stream_interval: int = 200
@@ -75,27 +73,29 @@ class CFG:
     search_tokens: int = 32
     top_logprobs: int = 5
     batch_size: int = 256
-    early_stop: int = 8
-    attempts: int = 16
-    workers: int = 32
+    attempts_per_problem: int = 16
     turns: int = 128
     seed: int = 42
     temperature: float = 0.5
     min_p: float = 0.02
 
-    solver_parallelism: int = 8
+    # Parallelism knobs (separated)
+    solver_parallelism: int = 8          # max concurrent in-flight attempts / LLM streams globally
+    kernel_workers: int = 32             # number of persistent Jupyter kernels
+    attempt_threads: int = 32            # host threads to execute attempts (should be >= solver_parallelism)
+    preload_workers: int = 32            # threads used for model weight page-caching
 
+    # Optional cap on problems processed (0 means all)
     max_problems: int = 0
 
     # Logging
     verbose: bool = True
 
-    # --- Prompts ---
+    # --- Prompts (DO NOT CHANGE) ---
     system_prompt: str = (
         "You are an elite mathematical problem solver with expertise at the International "
         "Mathematical Olympiad (IMO) level. Your goal is to find the correct answer through "
         "rigorous mathematical reasoning.\n\n"
-
         "# Problem-Solving Approach:\n"
         "1. UNDERSTAND: Carefully read and rephrase the problem in your own words. "
         "Identify what is given, what needs to be found, and any constraints.\n"
@@ -105,7 +105,6 @@ class CFG:
         "4. EXECUTE: Work through your solution methodically. Show all reasoning steps clearly.\n"
         "5. VERIFY: Check your answer by substituting back, testing edge cases, or using "
         "alternative methods. Ensure logical consistency throughout.\n\n"
-
         "# Mathematical Reasoning Principles:\n"
         "- Break complex problems into smaller, manageable sub-problems\n"
         "- Look for patterns, symmetries, and special cases that provide insight\n"
@@ -113,17 +112,14 @@ class CFG:
         "- Consider extreme cases and boundary conditions\n"
         "- If stuck, try working backwards from the desired result\n"
         "- Be willing to restart with a different approach if needed\n\n"
-
         "# Verification Requirements:\n"
         "- Cross-check arithmetic and algebraic manipulations\n"
         "- Verify that your solution satisfies all problem constraints\n"
         "- Test your answer with simple cases or special values when possible\n"
         "- Ensure dimensional consistency and reasonableness of the result\n\n"
-
         "# Output Format:\n"
         "The final answer must be a non-negative integer between 0 and 99999.\n"
         "Place your final numerical answer inside \\boxed{}, e.g., \\boxed{42}\n\n"
-
         "Think step-by-step and show your complete reasoning process. Quality of reasoning "
         "is as important as the final answer."
     )
@@ -135,17 +131,14 @@ class CFG:
         "- Generating examples or testing conjectures\n"
         "- Visualizing problem structure when helpful\n"
         "- Brute-force verification for small cases\n\n"
-
         "The environment is a stateful Jupyter notebook. Code persists between executions.\n"
         "Always use print() to display results. Write clear, well-commented code.\n\n"
-
         "Remember: Code should support your mathematical reasoning, not replace it. "
         "Explain what you\"re computing and why before running code."
     )
 
     preference_prompt: str = (
         "You have access to `math`, `numpy`, and `sympy` for:\n\n"
-
         "# Symbolic Computation (sympy):\n"
         "- Algebraic manipulation and simplification\n"
         "- Solving equations and systems of equations\n"
@@ -153,18 +146,15 @@ class CFG:
         "- Number theory functions (primes, divisors, modular arithmetic)\n"
         "- Polynomial operations and factorization\n"
         "- Working with mathematical expressions symbolically\n\n"
-
         "# Numerical Computation (numpy):\n"
         "- Array operations and linear algebra\n"
         "- Efficient numerical calculations for large datasets\n"
         "- Matrix operations and eigenvalue problems\n"
         "- Statistical computations\n\n"
-
         "# Mathematical Functions (math):\n"
         "- Standard mathematical functions (trig, log, exp)\n"
         "- Constants like pi and e\n"
         "- Basic operations for single values\n\n"
-
         "Best Practices:\n"
         "- Use sympy for exact symbolic answers when possible\n"
         "- Use numpy for numerical verification and large-scale computation\n"
@@ -184,16 +174,9 @@ class RunLogger:
       - solutions.csv   : one row per problem
       - events.jsonl    : timestamped high-level lifecycle events
 
-    Trace refactor:
-      - We avoid repeating full prompt text per turn.
-      - Each attempt record stores:
-         * trace.prompt_token_ids_initial: the initial prompt ids (system+user)
-         * trace.prompt_text_initial: the decoded prompt text
-         * trace.turns[i].completion_token_ids: tokens produced by the assistant in that turn
-      - Because Harmony rendering is deterministic, you can reconstruct prompt ids/text at each turn by:
-           conversation = parse(initial_prompt_ids) + replay completion tokens sequentially
-        (exactly what the solver did).
-      - For quick QA, we also store decoded completion text per turn and prompts
+    Trace:
+      - Non-redundant: store initial prompt token ids (turn 0) and per-turn completion token ids.
+      - Also store per-attempt started/finished timestamps and elapsed_ms.
     """
 
     def __init__(
@@ -233,16 +216,11 @@ class RunLogger:
             "is_correct",
             "selected_attempt",
             "selected_entropy",
-            "budget_seconds",
-            "deadline_ts",
             "solve_started_ts",
             "solve_finished_ts",
             "solve_elapsed_ms",
             "attempts_total",
             "attempts_with_answer",
-            "attempts_selected",
-            "attempts_rejected",
-            "finish_reason_counts",
             "vote_summary",
         ]
         with open(self.solutions_path, "w", newline="", encoding="utf-8") as f:
@@ -263,11 +241,11 @@ class RunLogger:
         for r in attempt_records:
             summary = (
                 f"id={r.get('id')} attempt={r.get('attempt')} "
-                f"status={r.get('status')} ans={r.get('attempt_answer')} "
-                f"final={r.get('pred_final_answer')} "
+                f"ans={r.get('attempt_answer')} final={r.get('pred_final_answer')} "
                 f"ent={r.get('entropy')} "
                 f"py={r.get('python_calls')}/{r.get('python_errors')} "
-                f"termination={r.get('termination_reason')}"
+                f"termination={r.get('termination_reason')} "
+                f"elapsed_ms={r.get('attempt_elapsed_ms')}"
             )
             rr = dict(r)
             rr["ts"] = ts
@@ -278,10 +256,10 @@ class RunLogger:
             self._append_jsonl(self.attempts_path, enriched)
 
         if self.verbose and enriched:
-            idv = enriched[0].get("id")
-            sel = [x for x in enriched if x.get("status") == "selected"]
-            sel_ans = sel[0].get("attempt_answer") if sel else None
-            print(f"[LOG:attempts] id={idv} attempts={len(enriched)} selected_ans={sel_ans}")
+            print(f"[LOG:attempts] attempts={len(enriched)}")
+            for e in enriched:
+                summary = e.get("summary")
+                print(f"[LOG:attempts] Attermpt summary: {summary}")
 
     def log_solution_row(
         self,
@@ -291,16 +269,11 @@ class RunLogger:
         is_correct: Optional[bool],
         selected_attempt: Optional[int],
         selected_entropy: Optional[float],
-        budget_seconds: Optional[float] = None,
-        deadline_ts: Optional[float] = None,
         solve_started_ts: Optional[str] = None,
         solve_finished_ts: Optional[str] = None,
         solve_elapsed_ms: Optional[int] = None,
         attempts_total: Optional[int] = None,
         attempts_with_answer: Optional[int] = None,
-        attempts_selected: Optional[int] = None,
-        attempts_rejected: Optional[int] = None,
-        finish_reason_counts: Optional[dict] = None,
         vote_summary: Optional[dict] = None,
     ):
         row = [
@@ -310,16 +283,11 @@ class RunLogger:
             is_correct,
             selected_attempt,
             selected_entropy,
-            budget_seconds,
-            deadline_ts,
             solve_started_ts,
             solve_finished_ts,
             solve_elapsed_ms,
             attempts_total,
             attempts_with_answer,
-            attempts_selected,
-            attempts_rejected,
-            json.dumps(finish_reason_counts or {}, ensure_ascii=False),
             json.dumps(vote_summary or {}, ensure_ascii=False),
         ]
 
@@ -572,34 +540,24 @@ class AIMO3Tool:
 
 
 # -----------------------------
-# Global LLM parallelism gate
-# -----------------------------
-class LLMGate:
-    """
-    A fair-ish semaphore that caps how many concurrent completion STREAMS can be active.
-    Acquire before creating a streaming completion; release after stream closes.
-    """
-
-    def __init__(self, capacity: int):
-        if capacity <= 0:
-            raise ValueError("solver_parallelism must be >= 1")
-        self._sem = threading.BoundedSemaphore(capacity)
-
-    def acquire(self):
-        self._sem.acquire()
-
-    def release(self):
-        self._sem.release()
-
-
-# -----------------------------
 # Solver
 # -----------------------------
 class AIMO3Solver:
-    def __init__(self, cfg: CFG, llm_gate: LLMGate):
-        self.cfg = cfg
-        self.llm_gate = llm_gate
+    """
+    Owns:
+      - Harmony encoding/template
+      - vLLM server process + OpenAI client
+      - persistent sandbox_pool (Jupyter kernels)
 
+    IMPORTANT:
+      - No early stopping.
+      - No per-problem deadline/budget logic.
+      - _run_attempt executes exactly one attempt (for one problem, one attempt_index),
+        using a per-attempt timeout.
+    """
+
+    def __init__(self, cfg: CFG):
+        self.cfg = cfg
         self.port = cfg.port
         self.base_url = f"http://0.0.0.0:{self.port}/v1"
         self.api_key = cfg.api_key
@@ -616,10 +574,9 @@ class AIMO3Solver:
         self._wait_for_server()
         self._initialize_kernels()
 
-        self.notebook_start_time = time.time()
-        self.problems_remaining = 50
-
+    # ---- server + kernels ----
     def _preload_model_weights(self) -> None:
+        # same logic as before, but uses cfg.preload_workers
         print(f"Loading model weights from {self.cfg.model_path} into OS Page Cache...")
         start_time = time.time()
 
@@ -638,7 +595,7 @@ class AIMO3Solver:
                 while file_object.read(1024 * 1024 * 1024):
                     pass
 
-        with ThreadPoolExecutor(max_workers=self.cfg.workers) as executor:
+        with ThreadPoolExecutor(max_workers=self.cfg.preload_workers) as executor:
             list(executor.map(_read_file, files_to_load))
 
         elapsed = time.time() - start_time
@@ -710,7 +667,7 @@ class AIMO3Solver:
         raise RuntimeError("Server failed to start (timeout).\n")
 
     def _initialize_kernels(self) -> None:
-        print(f"Initializing {self.cfg.workers} persistent Jupyter kernels...")
+        print(f"Initializing {self.cfg.kernel_workers} persistent Jupyter kernels...")
         start_time = time.time()
 
         self.sandbox_pool = queue.Queue()
@@ -718,14 +675,15 @@ class AIMO3Solver:
         def _create_sandbox():
             return AIMO3Sandbox(timeout=self.cfg.jupyter_timeout)
 
-        with ThreadPoolExecutor(max_workers=self.cfg.workers) as executor:
-            futures = [executor.submit(_create_sandbox) for _ in range(self.cfg.workers)]
+        with ThreadPoolExecutor(max_workers=self.cfg.kernel_workers) as executor:
+            futures = [executor.submit(_create_sandbox) for _ in range(self.cfg.kernel_workers)]
             for future in as_completed(futures):
                 self.sandbox_pool.put(future.result())
 
         elapsed = time.time() - start_time
         print(f"Kernels initialized in {elapsed:.2f} seconds.\n")
 
+    # ---- utilities ----
     def _decode_ids(self, ids: list[int]) -> str:
         return self.encoding.decode_utf8(ids)
 
@@ -781,29 +739,28 @@ class AIMO3Solver:
 
         return total_entropy / token_count
 
-    def _process_attempt(
+    # ---- one attempt (no global gate here; scheduling handles parallelism) ----
+    def run_attempt(
         self,
-        problem: str,
-        system_prompt: str,
+        *,
+        problem_id: str,
+        problem_text: str,
         attempt_index: int,
-        stop_event: threading.Event,
-        deadline: float,
     ) -> dict:
         """
-        Attempt record ALWAYS returned, even on failures.
-        Trace: store non-redundant token data:
-          - trace.prompt_token_ids_initial: rendered conversation for completion at turn 0
-          - trace.prompt_text_initial: text version of prompt at turn 0
-          - trace.turns: list of dicts per turn with completion_token_ids and optional completion_text
-          - trace.full_completion_token_ids: concatenated completion tokens (assistant-side)
-          - trace.full_conversation_token_ids: concatenated tokens for prompt + assistant + tool calls
-        Termination reason: always set in `termination_reason`.
+        Execute ONE attempt for ONE problem, with per-attempt timeout.
+
+        Returns a dict suitable to be stored in attempts.jsonl, but does NOT add:
+          - id/status/reject_reason/pred_final_answer (those are produced at ensemble time)
+        This function always returns a record, including failures/timeouts.
         """
-        # Always define so we can safely return
+        attempt_started_ts = datetime.now(timezone.utc).isoformat()
+        t0 = time.time()
+
+        # ALWAYS define
         turns_compact: list[dict] = []
         full_completion_ids: list[int] = []
         tool_calls: list[dict] = []
-
         termination_reason = "unknown"
         python_calls = 0
         python_errors = 0
@@ -812,37 +769,9 @@ class AIMO3Solver:
         logprobs_buffer = []
         sandbox = None
         prompt_token_ids_initial: list[int] = []
-
         conversation = None
 
-        if stop_event.is_set():
-            termination_reason = "skipped_stop_event"
-            return {
-                "Attempt": attempt_index + 1,
-                "Answer": None,
-                "Trace": {"prompt_token_ids_initial": [], "prompt_text_initial": [], "turns": [], "full_completion_token_ids": [], "full_conversation_token_ids": []},
-                "Termination Reason": termination_reason,
-                "Python Calls": 0,
-                "Python Errors": 0,
-                "Response Length": 0,
-                "Entropy": float("inf"),
-                "Tool Calls": [],
-            }
-
-        if time.time() > deadline:
-            termination_reason = "skipped_deadline"
-            return {
-                "Attempt": attempt_index + 1,
-                "Answer": None,
-                "Trace": {"prompt_token_ids_initial": [], "prompt_text_initial": [], "turns": [], "full_completion_token_ids": [], "full_conversation_token_ids": []},
-                "Termination Reason": termination_reason,
-                "Python Calls": 0,
-                "Python Errors": 0,
-                "Response Length": 0,
-                "Entropy": float("inf"),
-                "Tool Calls": [],
-            }
-
+        deadline = time.time() + float(self.cfg.attempt_timeout_seconds)
         local_tool = None
         attempt_seed = int((self.cfg.seed + attempt_index) ** 2)
 
@@ -854,19 +783,17 @@ class AIMO3Solver:
                 sandbox=sandbox,
             )
 
+            user_input = f"{problem_text} {self.cfg.preference_prompt}"
+
             encoding = self.encoding
-            messages = self.template.apply_chat_template(system_prompt, problem, local_tool.tool_config)
+            messages = self.template.apply_chat_template(self.cfg.system_prompt, user_input, local_tool.tool_config)
             conversation = Conversation.from_messages(messages)
 
-            # initial prompt ids for trace reconstruction
             prompt_token_ids_initial = list(encoding.render_conversation_for_completion(conversation, Role.ASSISTANT))
 
             for _turn in range(self.cfg.turns):
-                if stop_event.is_set():
-                    termination_reason = "stopped_by_early_stop"
-                    break
                 if time.time() > deadline:
-                    termination_reason = "deadline_exceeded"
+                    termination_reason = "attempt_deadline_exceeded"
                     break
 
                 prompt_ids = encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
@@ -876,8 +803,6 @@ class AIMO3Solver:
                     termination_reason = "context_exhausted"
                     break
 
-                # ---- LLM PARALLELISM GATE ----
-                self.llm_gate.acquire()
                 stream = None
                 try:
                     stream = self.client.completions.create(
@@ -899,11 +824,8 @@ class AIMO3Solver:
                     completion_text_parts: list[str] = []
 
                     for chunk in stream:
-                        if stop_event.is_set():
-                            termination_reason = "stopped_by_early_stop"
-                            break
                         if time.time() > deadline:
-                            termination_reason = "deadline_exceeded"
+                            termination_reason = "attempt_deadline_exceeded"
                             break
 
                         new_tokens = chunk.choices[0].token_ids or []
@@ -921,7 +843,6 @@ class AIMO3Solver:
                         if chunk_logprobs is not None and chunk_logprobs.top_logprobs:
                             logprobs_buffer.extend(chunk_logprobs.top_logprobs)
 
-                        # Fast boxed scan on streamed text
                         if "}" in new_text:
                             search_text = "".join(completion_text_parts[-self.cfg.search_tokens :])
                             answer = self._scan_for_answer(search_text)
@@ -933,15 +854,13 @@ class AIMO3Solver:
                     try:
                         if stream is not None:
                             stream.close()
-                    finally:
-                        self.llm_gate.release()
+                    except Exception:
+                        pass
 
-                # Record this turn (non-redundant)
                 turns_compact.append(
                     {
                         "turn": _turn,
                         "completion_token_ids": token_buffer,
-                        # optional convenience: decoded completion text only (no prompts)
                         "completion_text": self._decode_ids(token_buffer) if token_buffer else "",
                     }
                 )
@@ -950,7 +869,6 @@ class AIMO3Solver:
                     break
 
                 if not token_buffer:
-                    # No tokens produced this turn
                     if termination_reason == "unknown":
                         termination_reason = "no_tokens"
                     break
@@ -987,7 +905,6 @@ class AIMO3Solver:
                 termination_reason = "max_turns_or_no_answer"
 
         except queue.Empty:
-            # couldn't get sandbox in time
             python_errors += 1
             termination_reason = "sandbox_pool_timeout"
 
@@ -1006,6 +923,9 @@ class AIMO3Solver:
 
         mean_entropy = self._compute_mean_entropy(logprobs_buffer)
 
+        attempt_finished_ts = datetime.now(timezone.utc).isoformat()
+        attempt_elapsed_ms = int((time.time() - t0) * 1000)
+
         return {
             "Attempt": attempt_index + 1,
             "Response Length": total_tokens,
@@ -1018,118 +938,14 @@ class AIMO3Solver:
                 "prompt_text_initial": self._decode_ids(prompt_token_ids_initial) if prompt_token_ids_initial else "",
                 "turns": turns_compact,
                 "full_completion_token_ids": full_completion_ids,
-                "full_conversation_token_ids": encoding.render_conversation(conversation)
+                "full_conversation_token_ids": self.encoding.render_conversation(conversation) if conversation is not None else [],
             },
             "Termination Reason": termination_reason,
             "Tool Calls": tool_calls,
+            "Attempt Started TS": attempt_started_ts,
+            "Attempt Finished TS": attempt_finished_ts,
+            "Attempt Elapsed MS": attempt_elapsed_ms,
         }
-
-    def _select_answer(self, detailed_results: list[dict]) -> tuple[int, Optional[int], pd.DataFrame]:
-        answer_weights = defaultdict(float)
-        answer_votes = defaultdict(int)
-
-        for r in detailed_results:
-            ans = r.get("Answer")
-            ent = r.get("Entropy", float("inf"))
-            if ans is None:
-                continue
-            weight = 1.0 / max(ent, 1e-9)
-            answer_weights[ans] += weight
-            answer_votes[ans] += 1
-
-        scored = [{"answer": a, "votes": answer_votes[a], "score": w} for a, w in answer_weights.items()]
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        vote_df = pd.DataFrame(scored) if scored else pd.DataFrame(columns=["answer", "votes", "score"])
-
-        if not scored:
-            return 0, None, vote_df
-
-        final_answer = scored[0]["answer"]
-
-        candidates = [
-            (i, r.get("Entropy", float("inf")))
-            for i, r in enumerate(detailed_results)
-            if r.get("Answer") == final_answer
-        ]
-        selected_idx = min(candidates, key=lambda x: x[1])[0] if candidates else None
-
-        return final_answer, selected_idx, vote_df
-
-    def solve_problem(self, problem: str) -> tuple[int, dict]:
-        """
-        Has budget logic and per-problem attempt ensembling,
-        but global LLM parallelism is controlled by LLMGate in _process_attempt.
-        """
-        user_input = f"{problem} {self.cfg.preference_prompt}"
-
-        elapsed_global = time.time() - self.notebook_start_time
-        time_left = self.cfg.notebook_limit - elapsed_global
-
-        problems_left_others = max(0, self.problems_remaining - 1)
-        reserved_time = problems_left_others * self.cfg.base_problem_timeout
-
-        budget = time_left - reserved_time
-        budget = min(budget, self.cfg.high_problem_timeout)
-        budget = max(budget, self.cfg.base_problem_timeout)
-
-        deadline = time.time() + budget
-
-        tasks = [(self.cfg.system_prompt, attempt_index) for attempt_index in range(self.cfg.attempts)]
-
-        detailed_results = []
-        valid_answers = []
-        stop_event = threading.Event()
-        executor = ThreadPoolExecutor(max_workers=self.cfg.workers)
-
-        try:
-            futures = [
-                executor.submit(
-                    self._process_attempt,
-                    user_input,
-                    system_prompt,
-                    attempt_index,
-                    stop_event,
-                    deadline,
-                )
-                for (system_prompt, attempt_index) in tasks
-            ]
-
-            for future in as_completed(futures):
-                try:
-                    r = future.result()
-                    detailed_results.append(r)
-
-                    if r.get("Answer") is not None:
-                        valid_answers.append(r["Answer"])
-
-                    counts = Counter(valid_answers).most_common(1)
-                    if counts and counts[0][1] >= self.cfg.early_stop:
-                        stop_event.set()
-                        # We attempt to cancel pending futures; running ones may still finish.
-                        for f in futures:
-                            f.cancel()
-                        break
-
-                except Exception:
-                    continue
-
-        finally:
-            stop_event.set()
-            executor.shutdown(wait=True, cancel_futures=True)
-            self.problems_remaining = max(0, self.problems_remaining - 1)
-
-        final_answer, selected_idx, vote_df = self._select_answer(detailed_results)
-
-        artifact = {
-            "budget_seconds": float(budget),
-            "deadline_ts": float(deadline),
-            "final_answer": int(final_answer),
-            "selected_attempt_index": selected_idx,
-            "vote_df": vote_df,
-            "attempts": detailed_results,
-        }
-
-        return final_answer, artifact
 
     def close(self):
         if hasattr(self, "server_process") and self.server_process is not None:
@@ -1162,23 +978,85 @@ class AIMO3Solver:
 
 
 # -----------------------------
-# Sanity checks
+# Ensembling (after all attempts)
 # -----------------------------
+def ensemble_attempts(attempts: List[dict]) -> Tuple[int, Optional[int], pd.DataFrame]:
+    """
+    Same scoring as before: weight = 1/entropy, pick max total weight.
+    Representative selected attempt: lowest entropy among attempts with chosen answer.
+    """
+    answer_weights: Dict[int, float] = defaultdict(float)
+    answer_votes: Dict[int, int] = defaultdict(int)
+
+    for r in attempts:
+        ans = r.get("Answer")
+        ent = r.get("Entropy", float("inf"))
+        if ans is None:
+            continue
+        weight = 1.0 / max(float(ent), 1e-9)
+        answer_weights[int(ans)] += weight
+        answer_votes[int(ans)] += 1
+
+    scored = [{"answer": a, "votes": answer_votes[a], "score": w} for a, w in answer_weights.items()]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    vote_df = pd.DataFrame(scored) if scored else pd.DataFrame(columns=["answer", "votes", "score"])
+
+    if not scored:
+        return 0, None, vote_df
+
+    final_answer = int(scored[0]["answer"])
+    candidates = [
+        (i, float(r.get("Entropy", float("inf"))))
+        for i, r in enumerate(attempts)
+        if r.get("Answer") == final_answer
+    ]
+    selected_idx = min(candidates, key=lambda x: x[1])[0] if candidates else None
+    return final_answer, selected_idx, vote_df
+
+
+# -----------------------------
+# Problem state + global scheduler
+# -----------------------------
+@dataclass
+class ProblemState:
+    id_value: str
+    problem_text: str
+    true_answer: Optional[int]
+    total_attempts: int
+
+    next_attempt_idx: int = 0
+    attempts: List[dict] = None
+
+    solve_started_ts: str = ""
+    solve_finished_ts: str = ""
+    solve_elapsed_ms: int = 0
+
+    def __post_init__(self):
+        if self.attempts is None:
+            self.attempts = []
+
+
 def validate_cfg(cfg: CFG):
     errs = []
 
-    if cfg.attempts <= 0:
-        errs.append("attempts must be >= 1")
-    if cfg.early_stop <= 0:
-        errs.append("early_stop must be >= 1")
-    if cfg.early_stop > cfg.attempts:
-        errs.append("early_stop must be <= attempts")
+    if cfg.attempts_per_problem <= 0:
+        errs.append("attempts_per_problem must be >= 1")
+
     if cfg.solver_parallelism <= 0:
         errs.append("solver_parallelism must be >= 1")
-    if cfg.workers <= 0:
-        errs.append("workers must be >= 1")
-    if cfg.workers < cfg.solver_parallelism:
-        errs.append("workers (Jupyter kernel count) must be >= solver_parallelism")
+
+    if cfg.kernel_workers <= 0:
+        errs.append("kernel_workers must be >= 1")
+    if cfg.kernel_workers < cfg.solver_parallelism:
+        errs.append("kernel_workers must be >= solver_parallelism (to cover concurrent attempts)")
+
+    if cfg.attempt_threads <= 0:
+        errs.append("attempt_threads must be >= 1")
+    if cfg.attempt_threads < cfg.solver_parallelism:
+        errs.append("attempt_threads must be >= solver_parallelism (host threads to run concurrent attempts)")
+
+    if cfg.preload_workers <= 0:
+        errs.append("preload_workers must be >= 1")
 
     if cfg.context_tokens <= cfg.buffer_tokens:
         errs.append("context_tokens must be > buffer_tokens")
@@ -1193,397 +1071,335 @@ def validate_cfg(cfg: CFG):
     if not (0 <= cfg.min_p <= 1):
         errs.append("min_p must be in [0, 1]")
 
+    if cfg.attempt_timeout_seconds <= 0:
+        errs.append("attempt_timeout_seconds must be >= 1")
+
     if errs:
         raise ValueError("Invalid configuration:\n- " + "\n- ".join(errs))
 
 
-# -----------------------------
-# Batch solving (multiple problems concurrently)
-# -----------------------------
-def solve_one_problem(
+def iter_reference(reference_df: pl.DataFrame) -> Iterable[Tuple[str, str, Optional[int]]]:
+    for row in reference_df.iter_rows(named=True):
+        pid = str(row["id"])
+        ptxt = row["problem"]
+        true_answer = None
+        if "answer" in row and row["answer"] is not None:
+            try:
+                true_answer = int(row["answer"])
+            except Exception:
+                true_answer = None
+        yield pid, ptxt, true_answer
+
+
+def run_global_scheduler(
+    *,
     solver: AIMO3Solver,
     logger: RunLogger,
-    id_value: str,
-    problem_text: str,
-    true_answer: Optional[int],
-    ref_ans_by_id: Dict[str, Any],
-) -> Tuple[str, int]:
+    problems: List[ProblemState],
+) -> List[Dict[str, Any]]:
     """
-    Top-level worker for one problem. Returns (id, pred_answer).
-    Logs attempts and solution row.
+    Global attempt scheduler:
+      - Maintain up to cfg.solver_parallelism in-flight attempts at once.
+      - Attempts are per-problem sequential (attempt_index increases), but interleaved across problems.
+      - When all attempts for a problem complete, ensemble + log + record submission row.
     """
-    logger.log_event("problem_start", {"id": id_value})
-    question_text = str(problem_text)
+    cfg = solver.cfg
+    submission_rows: List[Dict[str, Any]] = []
+    lock = threading.Lock()
 
-    # Ground truth fallback
-    if true_answer is None and id_value in ref_ans_by_id:
-        try:
-            true_answer = int(ref_ans_by_id[id_value])
-        except Exception:
-            true_answer = None
+    # Track per-problem solve start
+    for ps in problems:
+        ps.solve_started_ts = datetime.now(timezone.utc).isoformat()
+        logger.log_event("problem_start", {"id": ps.id_value})
 
-    solve_started_ts = datetime.now(timezone.utc).isoformat()
-    t0 = time.time()
+    # In-flight futures -> (problem_index, attempt_index)
+    inflight: Dict[Future, Tuple[int, int]] = {}
 
-    gc.disable()
-    pred_answer, artifact = solver.solve_problem(question_text)
-    gc.enable()
-    gc.collect()
+    def submit_next_attempt(pool: ThreadPoolExecutor, problem_idx: int) -> bool:
+        ps = problems[problem_idx]
+        if ps.next_attempt_idx >= ps.total_attempts:
+            return False
+        attempt_idx = ps.next_attempt_idx
+        ps.next_attempt_idx += 1
 
-    solve_finished_ts = datetime.now(timezone.utc).isoformat()
-    solve_elapsed_ms = int((time.time() - t0) * 1000)
+        fut = pool.submit(
+            solver.run_attempt,
+            problem_id=ps.id_value,
+            problem_text=str(ps.problem_text),
+            attempt_index=attempt_idx,
+        )
+        inflight[fut] = (problem_idx, attempt_idx)
+        return True
 
-    attempts = artifact["attempts"]
-    selected_idx = artifact.get("selected_attempt_index", None)
-
-    selected_entropy = None
-    if selected_idx is not None and 0 <= selected_idx < len(attempts):
-        selected_entropy = attempts[selected_idx].get("Entropy", None)
-
-    is_correct = None
-    if true_answer is not None:
-        is_correct = (int(pred_answer) == int(true_answer))
-
-    # Build attempt log records with status + reject reason + termination reason (always)
-    attempt_records = []
-    for i, r in enumerate(attempts):
-        ans = r.get("Answer", None)
-        termination_reason = r.get("Termination Reason", "unknown")
-
-        if selected_idx is not None and i == selected_idx:
-            status = "selected"
-            reject_reason = ""
-        else:
-            status = "rejected"
-            if ans is None:
-                reject_reason = f"no_answer:{termination_reason}"
-            elif ans != pred_answer:
-                reject_reason = "different_answer"
-            else:
-                reject_reason = "same_answer_not_selected"
-
-        attempt_records.append(
-            {
-                "id": id_value,
-                "attempt": r.get("Attempt", i + 1),
-                "status": status,
-                "reject_reason": reject_reason,
-                "pred_final_answer": int(pred_answer),
-                "attempt_answer": ans,
-                "entropy": r.get("Entropy", None),
-                "response_length": r.get("Response Length", None),
-                "python_calls": r.get("Python Calls", None),
-                "python_errors": r.get("Python Errors", None),
-                "termination_reason": termination_reason,
-                "trace": r.get("Trace", {}),
-                "tool_calls": r.get("Tool Calls", []),
-            }
+    def finalize_problem(problem_idx: int):
+        ps = problems[problem_idx]
+        ps.solve_finished_ts = datetime.now(timezone.utc).isoformat()
+        ps.solve_elapsed_ms = int(
+            (datetime.fromisoformat(ps.solve_finished_ts) - datetime.fromisoformat(ps.solve_started_ts)).total_seconds()
+            * 1000
         )
 
-    attempts_total = len(attempt_records)
-    attempts_selected = sum(1 for x in attempt_records if x["status"] == "selected")
-    attempts_rejected = attempts_total - attempts_selected
-    attempts_with_answer = sum(1 for x in attempt_records if x["attempt_answer"] is not None)
+        # Ensemble AFTER all attempts
+        final_answer, selected_idx, vote_df = ensemble_attempts(ps.attempts)
 
-    finish_reason_counts = {}
-    for x in attempt_records:
-        fr = x.get("termination_reason", "unknown")
-        finish_reason_counts[fr] = finish_reason_counts.get(fr, 0) + 1
+        # Build attempt records for logging with final answer and selection info
+        attempt_records = []
+        for i, r in enumerate(ps.attempts):
+            ans = r.get("Answer", None)
+            termination_reason = r.get("Termination Reason", "unknown")
 
-    vote_summary = {}
-    try:
-        df = artifact["vote_df"]
-        vote_summary = {"top": df.head(5).to_dict(orient="records")}
-    except Exception:
+            if selected_idx is not None and i == selected_idx:
+                status = "selected"
+                reject_reason = ""
+            else:
+                status = "rejected"
+                if ans is None:
+                    reject_reason = f"no_answer:{termination_reason}"
+                elif int(ans) != int(final_answer):
+                    reject_reason = "different_answer"
+                else:
+                    reject_reason = "same_answer_not_selected"
+
+            attempt_records.append(
+                {
+                    "id": ps.id_value,
+                    "attempt": r.get("Attempt", i + 1),
+                    "status": status,
+                    "reject_reason": reject_reason,
+                    "pred_final_answer": int(final_answer),
+                    "attempt_answer": ans,
+                    "entropy": r.get("Entropy", None),
+                    "response_length": r.get("Response Length", None),
+                    "python_calls": r.get("Python Calls", None),
+                    "python_errors": r.get("Python Errors", None),
+                    "termination_reason": termination_reason,
+                    "attempt_started_ts": r.get("Attempt Started TS"),
+                    "attempt_finished_ts": r.get("Attempt Finished TS"),
+                    "attempt_elapsed_ms": r.get("Attempt Elapsed MS"),
+                    "trace": r.get("Trace", {}),
+                    "tool_calls": r.get("Tool Calls", []),
+                }
+            )
+
+        attempts_total = len(attempt_records)
+        attempts_with_answer = sum(1 for x in attempt_records if x["attempt_answer"] is not None)
+
         vote_summary = {}
+        try:
+            vote_summary = {"top": vote_df.head(5).to_dict(orient="records")}
+        except Exception:
+            vote_summary = {}
 
-    logger.log_attempts(attempt_records)
-    logger.log_solution_row(
-        id_value=id_value,
-        pred_answer=int(pred_answer),
-        true_answer=true_answer,
-        is_correct=is_correct,
-        selected_attempt=(
-            attempts[selected_idx].get("Attempt")
-            if selected_idx is not None and 0 <= selected_idx < len(attempts)
-            else None
-        ),
-        selected_entropy=selected_entropy,
-        budget_seconds=artifact.get("budget_seconds"),
-        deadline_ts=artifact.get("deadline_ts"),
-        solve_started_ts=solve_started_ts,
-        solve_finished_ts=solve_finished_ts,
-        solve_elapsed_ms=solve_elapsed_ms,
-        attempts_total=attempts_total,
-        attempts_with_answer=attempts_with_answer,
-        attempts_selected=attempts_selected,
-        attempts_rejected=attempts_rejected,
-        finish_reason_counts=finish_reason_counts,
-        vote_summary=vote_summary,
-    )
+        # correctness
+        is_correct = None
+        if ps.true_answer is not None:
+            is_correct = (int(final_answer) == int(ps.true_answer))
 
-    logger.log_event(
-        "problem_end",
-        {"id": id_value, "pred": int(pred_answer), "true": true_answer, "correct": is_correct},
-    )
+        selected_entropy = None
+        selected_attempt_number = None
+        if selected_idx is not None and 0 <= selected_idx < len(ps.attempts):
+            selected_entropy = ps.attempts[selected_idx].get("Entropy", None)
+            selected_attempt_number = ps.attempts[selected_idx].get("Attempt", selected_idx + 1)
 
-    return id_value, int(pred_answer)
+        logger.log_attempts(attempt_records)
+        logger.log_solution_row(
+            id_value=ps.id_value,
+            pred_answer=int(final_answer),
+            true_answer=ps.true_answer,
+            is_correct=is_correct,
+            selected_attempt=selected_attempt_number,
+            selected_entropy=selected_entropy,
+            solve_started_ts=ps.solve_started_ts,
+            solve_finished_ts=ps.solve_finished_ts,
+            solve_elapsed_ms=ps.solve_elapsed_ms,
+            attempts_total=attempts_total,
+            attempts_with_answer=attempts_with_answer,
+            vote_summary=vote_summary,
+        )
+
+        logger.log_event(
+            "problem_end",
+            {"id": ps.id_value, "pred": int(final_answer), "true": ps.true_answer, "correct": is_correct},
+        )
+
+        submission_rows.append({"id": ps.id_value, "answer": int(final_answer)})
+
+    # Scheduler: keep queue of problems with remaining attempts
+    pending_problem_idxs = [i for i, ps in enumerate(problems) if ps.total_attempts > 0]
+    unfinished = set(pending_problem_idxs)
+
+    # We use attempt_threads for host-side execution
+    with ThreadPoolExecutor(max_workers=cfg.attempt_threads) as pool:
+        # Prime inflight up to solver_parallelism
+        pi = 0
+        while len(inflight) < cfg.solver_parallelism and pi < len(pending_problem_idxs):
+            submit_next_attempt(pool, pending_problem_idxs[pi])
+            pi += 1
+
+        # If attempts_per_problem is small, this may leave capacity unused. Fill by cycling.
+        while len(inflight) < cfg.solver_parallelism and unfinished:
+            progressed = False
+            for idx in list(unfinished):
+                if len(inflight) >= cfg.solver_parallelism:
+                    break
+                # will not progress if attempts exhausted
+                progressed |= submit_next_attempt(pool, idx)
+            if not progressed:
+                break
+
+        # Event loop: as attempts finish, schedule more
+        while inflight:
+            done_futs = []
+            for fut in as_completed(list(inflight.keys()), timeout=None):
+                done_futs.append(fut)
+                # Only handle one completion at a time to simplify fairness
+                break
+
+            for fut in done_futs:
+                problem_idx, attempt_idx = inflight.pop(fut)
+                ps = problems[problem_idx]
+
+                try:
+                    attempt_record = fut.result()
+                except Exception as exc:
+                    exc_text = f"future_exception:{type(exc).__name__} msg={exc}"
+                    print(f'[warn] {exc_text}')
+                    # Last-resort: synthesize an attempt record so we still "save all attempts"
+                    attempt_record = {
+                        "Attempt": attempt_idx + 1,
+                        "Response Length": 0,
+                        "Python Calls": 0,
+                        "Python Errors": 1,
+                        "Entropy": float("inf"),
+                        "Answer": None,
+                        "Trace": {
+                            "prompt_token_ids_initial": [],
+                            "prompt_text_initial": "",
+                            "turns": [],
+                            "full_completion_token_ids": [],
+                            "full_conversation_token_ids": [],
+                        },
+                        "Termination Reason": exc_text,
+                        "Tool Calls": [],
+                        "Attempt Started TS": "",
+                        "Attempt Finished TS": datetime.now(timezone.utc).isoformat(),
+                        "Attempt Elapsed MS": 0,
+                    }
+
+                ps.attempts.append(attempt_record)
+
+                # If this problem finished all attempts, finalize it
+                if len(ps.attempts) >= ps.total_attempts:
+                    if problem_idx in unfinished:
+                        unfinished.remove(problem_idx)
+                    finalize_problem(problem_idx)
+
+                # Fill available slots up to solver_parallelism by pulling next attempts
+                while len(inflight) < cfg.solver_parallelism and unfinished:
+                    progressed = False
+                    # fairness: try to schedule one attempt from each unfinished problem in round-robin-ish order
+                    for idx in list(unfinished):
+                        if len(inflight) >= cfg.solver_parallelism:
+                            break
+                        if submit_next_attempt(pool, idx):
+                            progressed = True
+                    if not progressed:
+                        break
+
+    return submission_rows
 
 
 # -----------------------------
 # CLI
 # -----------------------------
 def parse_args() -> CFG:
-    p = argparse.ArgumentParser(description="AIMO3 multi-problem solver with global LLM parallelism gating.")
+    p = argparse.ArgumentParser(description="AIMO3 solver with global attempt scheduler (no early stop, per-attempt timeout).")
 
     # Paths
-    p.add_argument(
-        "--reference-path",
-        default=CFG.reference_path,
-        help="Path to reference.csv containing columns: id, problem, answer.",
-    )
-    p.add_argument(
-        "--log-dir",
-        default=CFG.log_dir,
-        help="Directory to write logs: attempts.jsonl, solutions.csv, events.jsonl, submission.csv.",
-    )
-    p.add_argument(
-        "--attempts-log",
-        dest="attempts_filename",
-        default=CFG.attempts_filename,
-        help="Filename (within --log-dir) for per-attempt JSONL logs.",
-    )
-    p.add_argument(
-        "--solutions-log",
-        dest="solutions_filename",
-        default=CFG.solutions_filename,
-        help="Filename (within --log-dir) for per-problem CSV summary logs.",
-    )
-    p.add_argument(
-        "--submission-out",
-        dest="submission_filename",
-        default=CFG.submission_filename,
-        help="Filename (within --log-dir) for the final submission CSV (id, answer).",
-    )
+    p.add_argument("--reference-path", default=CFG.reference_path,
+                   help="Path to reference.csv containing columns: id, problem, answer.")
+    p.add_argument("--log-dir", default=CFG.log_dir,
+                   help="Directory to write logs: attempts.jsonl, solutions.csv, events.jsonl, submission.csv.")
+    p.add_argument("--attempts-log", dest="attempts_filename", default=CFG.attempts_filename,
+                   help="Filename (within --log-dir) for per-attempt JSONL logs.")
+    p.add_argument("--solutions-log", dest="solutions_filename", default=CFG.solutions_filename,
+                   help="Filename (within --log-dir) for per-problem CSV summary logs.")
+    p.add_argument("--submission-out", dest="submission_filename", default=CFG.submission_filename,
+                   help="Filename (within --log-dir) for the final submission CSV (id, answer).")
 
     # Model server
-    p.add_argument(
-        "--served-model-name",
-        default=CFG.served_model_name,
-        help="OpenAI-compatible model name exposed by the vLLM server.",
-    )
-    p.add_argument(
-        "--model-path",
-        default=CFG.model_path,
-        help="Local filesystem path to the HF/vLLM model directory.",
-    )
-    p.add_argument(
-        "--port",
-        type=int,
-        default=CFG.port,
-        help="Port for the local vLLM OpenAI server.",
-    )
-    p.add_argument(
-        "--api-key",
-        default=CFG.api_key,
-        help="API key string used by the OpenAI client (for local server can be any value).",
-    )
-    p.add_argument(
-        "--kv-cache-dtype",
-        default=CFG.kv_cache_dtype,
-        help="vLLM KV cache dtype (e.g., fp8_e4m3).",
-    )
-    p.add_argument(
-        "--dtype",
-        default=CFG.dtype,
-        help="vLLM model dtype (e.g., auto, float16, bfloat16).",
-    )
-    p.add_argument(
-        "--gpu-memory-utilization",
-        type=float,
-        default=CFG.gpu_memory_utilization,
-        help="Fraction of GPU memory vLLM is allowed to use (0-1).",
-    )
+    p.add_argument("--served-model-name", default=CFG.served_model_name,
+                   help="OpenAI-compatible model name exposed by the vLLM server.")
+    p.add_argument("--model-path", default=CFG.model_path,
+                   help="Local filesystem path to the HF/vLLM model directory.")
+    p.add_argument("--port", type=int, default=CFG.port,
+                   help="Port for the local vLLM OpenAI server.")
+    p.add_argument("--api-key", default=CFG.api_key,
+                   help="API key string used by the OpenAI client (for local server can be any value).")
+    p.add_argument("--kv-cache-dtype", default=CFG.kv_cache_dtype,
+                   help="vLLM KV cache dtype (e.g., fp8_e4m3).")
+    p.add_argument("--dtype", default=CFG.dtype,
+                   help="vLLM model dtype (e.g., auto, float16, bfloat16).")
+    p.add_argument("--gpu-memory-utilization", type=float, default=CFG.gpu_memory_utilization,
+                   help="Fraction of GPU memory vLLM is allowed to use (0-1).")
 
-    # Budgets / timeouts
-    p.add_argument(
-        "--high-problem-timeout-seconds",
-        dest="high_problem_timeout",
-        type=int,
-        default=CFG.high_problem_timeout,
-        help="Maximum time budget (seconds) assigned to a single hard problem.",
-    )
-    p.add_argument(
-        "--base-problem-timeout-seconds",
-        dest="base_problem_timeout",
-        type=int,
-        default=CFG.base_problem_timeout,
-        help="Minimum time budget (seconds) assigned to any problem.",
-    )
-    p.add_argument(
-        "--notebook-time-budget-seconds",
-        dest="notebook_limit",
-        type=int,
-        default=CFG.notebook_limit,
-        help="Total wall-clock budget (seconds) assumed for the entire run; used for per-problem budgeting.",
-    )
-    p.add_argument(
-        "--server-startup-timeout-seconds",
-        dest="server_timeout",
-        type=int,
-        default=CFG.server_timeout,
-        help="How long to wait (seconds) for vLLM server to become ready.",
-    )
-    p.add_argument(
-        "--openai-client-timeout-seconds",
-        dest="session_timeout",
-        type=int,
-        default=CFG.session_timeout,
-        help="Timeout (seconds) for a single OpenAI client request (stream).",
-    )
-    p.add_argument(
-        "--jupyter-exec-timeout-seconds",
-        dest="jupyter_timeout",
-        type=int,
-        default=CFG.jupyter_timeout,
-        help="Timeout (seconds) for a single python tool execution in a sandbox kernel.",
-    )
-    p.add_argument(
-        "--sandbox-acquire-timeout-seconds",
-        dest="sandbox_timeout",
-        type=int,
-        default=CFG.sandbox_timeout,
-        help="Timeout (seconds) to acquire a sandbox kernel from the pool.",
-    )
+    # Timeouts
+    p.add_argument("--server-startup-timeout-seconds", dest="server_timeout", type=int, default=CFG.server_timeout,
+                   help="How long to wait (seconds) for vLLM server to become ready.")
+    p.add_argument("--openai-client-timeout-seconds", dest="session_timeout", type=int, default=CFG.session_timeout,
+                   help="Timeout (seconds) for a single OpenAI client request (stream).")
+    p.add_argument("--jupyter-exec-timeout-seconds", dest="jupyter_timeout", type=int, default=CFG.jupyter_timeout,
+                   help="Timeout (seconds) for a single python tool execution in a sandbox kernel.")
+    p.add_argument("--sandbox-acquire-timeout-seconds", dest="sandbox_timeout", type=int, default=CFG.sandbox_timeout,
+                   help="Timeout (seconds) to acquire a sandbox kernel from the pool.")
+    p.add_argument("--attempt-timeout-seconds", dest="attempt_timeout_seconds", type=int, default=CFG.attempt_timeout_seconds,
+                   help="Per-attempt wall-clock timeout (seconds). Attempts terminate if exceeded.")
 
     # Decoding/sampling
-    p.add_argument(
-        "--stream-interval",
-        type=int,
-        default=CFG.stream_interval,
-        help="vLLM stream interval (tokens) for partial outputs.",
-    )
-    p.add_argument(
-        "--context-tokens",
-        type=int,
-        default=CFG.context_tokens,
-        help="Maximum model context length (tokens).",
-    )
-    p.add_argument(
-        "--buffer-tokens",
-        type=int,
-        default=CFG.buffer_tokens,
-        help="Minimum safety buffer of tokens; stop if remaining context drops below this.",
-    )
-    p.add_argument(
-        "--boxed-scan-window-tokens",
-        dest="search_tokens",
-        type=int,
-        default=CFG.search_tokens,
-        help="How many recent streamed text chunks to scan for \\boxed{...}.",
-    )
-    p.add_argument(
-        "--top-logprobs",
-        type=int,
-        default=CFG.top_logprobs,
-        help="Number of top logprobs per token to request for entropy estimation.",
-    )
-    p.add_argument(
-        "--max-num-seqs",
-        dest="batch_size",
-        type=int,
-        default=CFG.batch_size,
-        help="vLLM --max-num-seqs (max concurrent sequences).",
-    )
-    p.add_argument(
-        "--early-stop-votes",
-        dest="early_stop",
-        type=int,
-        default=CFG.early_stop,
-        help="Stop attempts early once the same answer is observed this many times.",
-    )
-    p.add_argument(
-        "--attempts-per-problem",
-        dest="attempts",
-        type=int,
-        default=CFG.attempts,
-        help="Number of independent attempts (ensembling runs) per problem.",
-    )
-    p.add_argument(
-        "--jupyter-kernels",
-        dest="workers",
-        type=int,
-        default=CFG.workers,
-        help="Number of persistent Jupyter kernels to pre-initialize (tool sandboxes). Must be >= --solver-parallelism.",
-    )
-    p.add_argument(
-        "--attempt-worker-threads",
-        dest="attempt_threads",
-        type=int,
-        default=0,
-        help="Threads used to run attempts within each problem. 0 means use --jupyter-kernels.",
-    )
-    p.add_argument(
-        "--max-turns",
-        dest="turns",
-        type=int,
-        default=CFG.turns,
-        help="Maximum Harmony turns per attempt.",
-    )
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=CFG.seed,
-        help="Random seed for reproducibility.",
-    )
-    p.add_argument(
-        "--temperature",
-        type=float,
-        default=CFG.temperature,
-        help="Sampling temperature for completions.",
-    )
-    p.add_argument(
-        "--min-p",
-        type=float,
-        default=CFG.min_p,
-        help="min_p nucleus-like sampling parameter passed via extra_body.",
-    )
+    p.add_argument("--stream-interval", type=int, default=CFG.stream_interval,
+                   help="vLLM stream interval (tokens) for partial outputs.")
+    p.add_argument("--context-tokens", type=int, default=CFG.context_tokens,
+                   help="Maximum model context length (tokens).")
+    p.add_argument("--buffer-tokens", type=int, default=CFG.buffer_tokens,
+                   help="Minimum safety buffer of tokens; stop if remaining context drops below this.")
+    p.add_argument("--boxed-scan-window-tokens", dest="search_tokens", type=int, default=CFG.search_tokens,
+                   help="How many recent streamed text chunks to scan for \\boxed{...}.")
+    p.add_argument("--top-logprobs", type=int, default=CFG.top_logprobs,
+                   help="Number of top logprobs per token to request for entropy estimation.")
+    p.add_argument("--max-num-seqs", dest="batch_size", type=int, default=CFG.batch_size,
+                   help="vLLM --max-num-seqs (max concurrent sequences).")
+    p.add_argument("--attempts-per-problem", dest="attempts_per_problem", type=int, default=CFG.attempts_per_problem,
+                   help="Number of independent attempts (ensembling runs) per problem.")
+    p.add_argument("--max-turns", dest="turns", type=int, default=CFG.turns,
+                   help="Maximum Harmony turns per attempt.")
+    p.add_argument("--seed", type=int, default=CFG.seed,
+                   help="Random seed for reproducibility.")
+    p.add_argument("--temperature", type=float, default=CFG.temperature,
+                   help="Sampling temperature for completions.")
+    p.add_argument("--min-p", type=float, default=CFG.min_p,
+                   help="min_p nucleus-like sampling parameter passed via extra_body.")
 
-    p.add_argument(
-        "--solver-parallelism",
-        type=int,
-        default=CFG.solver_parallelism,
-        help=(
-            "Global cap on the number of concurrent LLM completion streams across ALL problems and attempts. "
-            "Example: attempts-per-problem=16 and solver-parallelism=8 -> only 8 attempts stream at once; remaining wait. "
-            "Example: attempts-per-problem=1 and solver-parallelism=8 -> up to 8 problems solved concurrently."
-        ),
-    )
-    p.add_argument(
-        "--max-problems",
-        type=int,
-        default=CFG.max_problems,
-        help="Optional cap on number of problems to process (<=0 means all rows in reference.csv).",
-    )
+    # Parallelism knobs
+    p.add_argument("--solver-parallelism", dest="solver_parallelism", type=int, default=CFG.solver_parallelism,
+                   help="Max number of concurrent in-flight attempts / LLM streams globally.")
+    p.add_argument("--jupyter-kernels", dest="kernel_workers", type=int, default=CFG.kernel_workers,
+                   help="Number of persistent Jupyter kernels to pre-initialize (tool sandboxes). Must be >= solver-parallelism.")
+    p.add_argument("--attempt-threads", dest="attempt_threads", type=int, default=CFG.attempt_threads,
+                   help="Host thread pool size for executing attempts (should be >= solver-parallelism).")
+    p.add_argument("--preload-workers", dest="preload_workers", type=int, default=CFG.preload_workers,
+                   help="Thread count used to page-cache model weights from disk before starting vLLM.")
+
+    # Optional cap
+    p.add_argument("--max-problems", type=int, default=CFG.max_problems,
+                   help="Optional cap on number of problems to process (<=0 means all rows in reference.csv).")
 
     # Logging verbosity
-    p.add_argument(
-        "--verbose",
-        action="store_true",
-        default=CFG.verbose,
-        help="Enable verbose console logging.",
-    )
-    p.add_argument(
-        "--quiet",
-        action="store_true",
-        default=False,
-        help="Disable verbose console logging.",
-    )
+    p.add_argument("--verbose", action="store_true", default=CFG.verbose,
+                   help="Enable verbose console logging.")
+    p.add_argument("--quiet", action="store_true", default=False,
+                   help="Disable verbose console logging.")
 
     args = p.parse_args()
-
-    # attempt worker threads default
-    attempt_threads = args.attempt_threads if args.attempt_threads and args.attempt_threads > 0 else args.workers
 
     cfg = CFG(
         reference_path=args.reference_path,
@@ -1591,6 +1407,7 @@ def parse_args() -> CFG:
         attempts_filename=args.attempts_filename,
         solutions_filename=args.solutions_filename,
         submission_filename=args.submission_filename,
+
         served_model_name=args.served_model_name,
         model_path=args.model_path,
         port=args.port,
@@ -1598,43 +1415,37 @@ def parse_args() -> CFG:
         kv_cache_dtype=args.kv_cache_dtype,
         dtype=args.dtype,
         gpu_memory_utilization=args.gpu_memory_utilization,
-        high_problem_timeout=args.high_problem_timeout,
-        base_problem_timeout=args.base_problem_timeout,
-        notebook_limit=args.notebook_limit,
+
         server_timeout=args.server_timeout,
         session_timeout=args.session_timeout,
         jupyter_timeout=args.jupyter_timeout,
         sandbox_timeout=args.sandbox_timeout,
+        attempt_timeout_seconds=args.attempt_timeout_seconds,
+
         stream_interval=args.stream_interval,
         context_tokens=args.context_tokens,
         buffer_tokens=args.buffer_tokens,
         search_tokens=args.search_tokens,
         top_logprobs=args.top_logprobs,
         batch_size=args.batch_size,
-        early_stop=args.early_stop,
-        attempts=args.attempts,
-        workers=args.workers,
+        attempts_per_problem=args.attempts_per_problem,
         turns=args.turns,
         seed=args.seed,
         temperature=args.temperature,
         min_p=args.min_p,
+
         solver_parallelism=args.solver_parallelism,
+        kernel_workers=args.kernel_workers,
+        attempt_threads=args.attempt_threads,
+        preload_workers=args.preload_workers,
+
         max_problems=args.max_problems,
+
         verbose=(False if args.quiet else args.verbose),
     )
-
-    # We keep cfg.workers as the number of kernels.
-    # Attempt threads are controlled by cfg.workers in solve_problem; if you need separate,
-    # you can extend CFG. For now, preserve existing meaning (workers == attempt threads) as in your script.
-    # If you want separate knobs, add `attempt_threads` to CFG and use it in solve_problem's executor.
-    # (Not requested, so not adding.)
-
     return cfg
 
 
-# -----------------------------
-# Main
-# -----------------------------
 def main():
     cfg = parse_args()
     validate_cfg(cfg)
@@ -1652,21 +1463,17 @@ def main():
     if "id" not in reference_df.columns or "problem" not in reference_df.columns:
         raise ValueError("reference.csv must contain columns: id, problem, answer")
 
-    # Optional max_problems
     if cfg.max_problems and cfg.max_problems > 0:
         reference_df = reference_df.head(cfg.max_problems)
 
-    ref_ans_by_id = {}
+    # ground truth map (optional)
+    ref_ans_by_id: Dict[str, Any] = {}
     if "answer" in reference_df.columns:
         ref_ans_by_id = dict(zip(reference_df["id"].to_list(), reference_df["answer"].to_list()))
 
     logger = RunLogger(attempts_path, solutions_path, log_dir=str(log_dir), verbose=cfg.verbose)
 
-    # Global LLM gate
-    llm_gate = LLMGate(cfg.solver_parallelism)
-
-    solver = AIMO3Solver(cfg, llm_gate=llm_gate)
-    solver.problems_remaining = reference_df.height
+    solver = AIMO3Solver(cfg)
 
     print("Base URL:", solver.base_url)
     poll_result = solver.server_process.poll()
@@ -1674,57 +1481,41 @@ def main():
     assert poll_result is None
     print("Models list:", solver.client.models.list())  # should succeed
 
-    # ---- Problem-level concurrency ----
-    problem_workers = max(1, cfg.solver_parallelism)
+    # Build problem states
+    problems: List[ProblemState] = []
+    for pid, ptxt, true_ans in iter_reference(reference_df):
+        if true_ans is None and pid in ref_ans_by_id:
+            try:
+                true_ans = int(ref_ans_by_id[pid])
+            except Exception:
+                true_ans = None
+        problems.append(
+            ProblemState(
+                id_value=pid,
+                problem_text=str(ptxt),
+                true_answer=true_ans,
+                total_attempts=cfg.attempts_per_problem,
+            )
+        )
 
-    out_rows: List[Dict[str, Any]] = []
-
+    # Run global scheduler
+    gc.disable()
     try:
-        # Submit all problems; use futures to collect results as they finish.
-        with ThreadPoolExecutor(max_workers=problem_workers) as pool:
-            futures = []
-            for row in reference_df.iter_rows(named=True):
-                id_value = str(row["id"])
-                problem_text = row["problem"]
-                true_answer = None
-                if "answer" in row and row["answer"] is not None:
-                    try:
-                        true_answer = int(row["answer"])
-                    except Exception:
-                        true_answer = None
-
-                fut = pool.submit(
-                    solve_one_problem,
-                    solver,
-                    logger,
-                    id_value,
-                    problem_text,
-                    true_answer,
-                    ref_ans_by_id,
-                )
-                futures.append(fut)
-
-            for fut in as_completed(futures):
-                try:
-                    pid, pred = fut.result()
-                    out_rows.append({"id": pid, "answer": int(pred)})
-                except Exception as exc:
-                    # If a whole problem crashes unexpectedly, log it and continue.
-                    # (solve_one_problem should be robust; this is a last-resort.)
-                    logger.log_event("problem_exception", {"msg": repr(exc)})
-
-        # Keep deterministic order in submission (same as reference_df order)
-        order = reference_df["id"].to_list()
-        pred_by_id = {r["id"]: r["answer"] for r in out_rows}
-        submission_rows = [{"id": pid, "answer": int(pred_by_id.get(pid, 0))} for pid in order]
-
-        submission_df = pl.DataFrame(submission_rows)
-        submission_df.write_csv(submission_path)
-        print(f"\nWrote submission to: {submission_path}")
-        print(submission_df.head(5))
-
+        submission_rows = run_global_scheduler(solver=solver, logger=logger, problems=problems)
     finally:
+        gc.enable()
+        gc.collect()
         solver.close()
+
+    # Deterministic submission order
+    order = reference_df["id"].to_list()
+    pred_by_id = {r["id"]: r["answer"] for r in submission_rows}
+    submission_out = [{"id": pid, "answer": int(pred_by_id.get(pid, 0))} for pid in order]
+
+    submission_df = pl.DataFrame(submission_out)
+    submission_df.write_csv(submission_path)
+    print(f"\nWrote submission to: {submission_path}")
+    print(submission_df.head(5))
 
 
 if __name__ == "__main__":
