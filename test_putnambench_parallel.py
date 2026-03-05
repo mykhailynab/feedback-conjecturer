@@ -12,8 +12,8 @@ import argparse
 import threading
 import subprocess
 from pathlib import Path
-from dataclasses import dataclass
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from typing import Optional, Any, Dict, List, Tuple, Iterable
 
 import pandas as pd
@@ -1248,6 +1248,14 @@ class AnswerEquivalenceAgent:
 
 
     def check_vs_truth(self, *, problem_text: str, truth_answer_text: str, candidate_answer_text: str) -> Dict[str, Any]:
+        if truth_answer_text == candidate_answer_text:
+            return {
+                "result": {"equivalent": True, "confidence": 1.0, "reason": "strings_equal"},
+                "raw_output": "",
+                "termination_reason": "strings_equal",
+                "tool_calls": [],
+                "turns": [],
+            }
         user_prompt = (
             "PROBLEM:\n"
             f"{problem_text}\n\n"
@@ -1259,6 +1267,14 @@ class AnswerEquivalenceAgent:
         return self._run_check(system_prompt=self.cfg.checker_system_prompt_truth, user_prompt=user_prompt)
 
     def check_pair(self, *, problem_text: str, answer_a: str, answer_b: str) -> Dict[str, Any]:
+        if answer_a == answer_b:
+            return {
+                "result": {"equivalent": True, "confidence": 1.0, "reason": "strings_equal"},
+                "raw_output": "",
+                "termination_reason": "strings_equal",
+                "tool_calls": [],
+                "turns": [],
+            }
         user_prompt = (
             "PROBLEM:\n"
             f"{problem_text}\n\n"
@@ -1268,24 +1284,6 @@ class AnswerEquivalenceAgent:
             f"{answer_b}\n"
         )
         return self._run_check(system_prompt=self.cfg.checker_system_prompt_pair, user_prompt=user_prompt)
-
-
-# ============================================================
-# Problem state + global attempt scheduler (mostly same; answers become text)
-# ============================================================
-@dataclass
-class ProblemState:
-    id_value: str
-    problem_text: str
-    true_answer_text: str
-    total_attempts: int
-
-    next_attempt_idx: int = 0
-    attempts: List[dict] = []
-
-    solve_started_ts: str = ""
-    solve_finished_ts: str = ""
-    solve_elapsed_ms: int = 0
 
 
 # ============================================================
@@ -1343,7 +1341,9 @@ def iter_reference(reference_df: pl.DataFrame) -> Iterable[Tuple[str, str, Optio
         true_answer_text = str(row["answer"])
         yield pid, ptxt, true_answer_text
 
-
+# ============================================================
+# Scheduler class
+# ============================================================
 @dataclass
 class AnswerGroup:
     group_id: int
@@ -1365,160 +1365,176 @@ class PerProblemGroupingState:
             ]
         }
 
-
-def run_equivalence_grouping_task(
-    *,
-    agent: AnswerEquivalenceAgent,
-    problem_text: str,
-    answer_text: str,
-    grouping_state: PerProblemGroupingState,
-) -> Dict[str, Any]:
-    """
-    One scheduled task that compares `answer_text` against existing group representatives,
-    in order. Creates a new group if no match.
-
-    Returns:
-      {
-        "group_id": int,
-        "created_new": bool,
-        "checks": [ { "against_group_id": int, "agent_call": <full agent response dict> } ... ]
-      }
-    """
-    checks: List[Dict[str, Any]] = []
-
-    ans_norm = answer_text.strip()
-
-    for g in grouping_state.groups:
-        rep_norm = (g.rep_text or "").strip()
-        if ans_norm == rep_norm:
-            return {"group_id": g.group_id, "created_new": False, "checks": checks}
-
-        call = agent.check_pair(problem_text=problem_text, answer_a=answer_text, answer_b=g.rep_text)
-        checks.append({"against_group_id": g.group_id, "agent_call": call})
-
-        if bool(call.get("result", {}).get("equivalent", False)):
-            return {"group_id": g.group_id, "created_new": False, "checks": checks}
-
-    # No match -> create new
-    new_gid = len(grouping_state.groups)
-    grouping_state.groups.append(AnswerGroup(group_id=new_gid, rep_text=answer_text, members=[]))
-    return {"group_id": new_gid, "created_new": True, "checks": checks}
-
-
-# ============================================================
-# Scheduler class
-# ============================================================
-# ============================================================
-# NEW: helper dataclass for per-problem mutable pipeline state
-# ============================================================
 @dataclass
-class ProblemPipelineState:
-    grouping_state: PerProblemGroupingState
-    attempt_to_group: Dict[int, int]
-    attempt_equiv_logs: Dict[int, List[dict]]
-    group_weight: Dict[int, float]
-    group_votes: Dict[int, int]
+class ProblemState:
+    id_value: str
+    problem_text: str
+    true_answer_text: str
+    total_attempts: int
 
-    # executor-local / loop-local
-    inflight_attempts: Dict[Future, int]
-    inflight_grouping: Dict[Future, int]
-    next_attempt_idx: int
-    grouped_count: int
+    # attempt lifecycle
+    next_attempt_idx: int = 0
+    attempts: List[dict] = field(default_factory=list)
+    attempts_done: int = 0
+
+    # grouping lifecycle
+    grouping_state: PerProblemGroupingState = field(default_factory=PerProblemGroupingState)
+    attempt_equiv_logs: Dict[int, List[dict]] = field(default_factory=lambda: defaultdict(list))
+    grouped_done: int = 0
+
+    # scoring (group -> weight/votes)
+    group_weight: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
+    group_votes: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
+
+    # correctness / finalize lifecycle
+    truth_scheduled: bool = False
+    truth_done: bool = False
+    finalized: bool = False
+
+    selected_group_id: int = -1
+    selected_attempt_idx: Optional[int] = None     # 0-based attempt_idx
+    selected_attempt_number: Optional[int] = None  # 1-based Attempt field
+    selected_entropy: Optional[float] = None
+    pred_answer_text: str = ""
+    is_correct: Optional[bool] = None
+    checker_summary: Dict[str, Any] = field(default_factory=dict)
+
+    # wallclock
+    solve_started_ts: str = ""
+    solve_finished_ts: str = ""
+    solve_elapsed_ms: int = 0
+
+    # mark when we emitted problem_start log (for “late start”)
+    started_logged: bool = False
 
 
-class SequentialProblemScheduler:
+@dataclass(frozen=True)
+class SchedulerTaskInfo:
+    kind: str  # "attempt" | "equiv_check" | "truth_check"
+    problem_idx: int
+    attempt_idx: Optional[int] = None
+    against_group_id: Optional[int] = None
+
+
+class ProblemScheduler:
+    """
+    This scheduler runs a global task loop across problems
+    to fully utilize cfg.agent_parallelism.
+
+    Inflight tasks include:
+      - attempt tasks (solver.run_attempt)
+      - equivalence check tasks (agent.check_pair)
+      - group create tasks (pure python, but scheduled to respect the same cap)
+      - truth check tasks (agent.check_vs_truth)
+
+    Policy:
+      - Fill capacity with attempt futures in problem order, exhaust attempts per problem before moving on.
+      - On attempt completion, immediately append equivalence-related tasks.
+      - Once all attempts are grouped for a problem, schedule a truth-check task.
+      - Finalize (solutions row + submission row) when truth-check completes (or when no pred possible).
+    """
+
     def __init__(self, *, cfg: CFG, solver: AIMO3Solver, logger: RunLogger):
         self.cfg = cfg
         self.solver = solver
         self.logger = logger
         self.agent = AnswerEquivalenceAgent(cfg=cfg, solver=solver)
 
+    # ------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------
     def run_all(self, *, problems: List[ProblemState]) -> List[Dict[str, Any]]:
         submission_rows: List[Dict[str, Any]] = []
 
-        for ps in problems:
-            submission_rows.append(self._run_one_problem(ps))
+        # One global executor that enforces the overall cap.
+        with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
+            inflight: Dict[Future, SchedulerTaskInfo] = {}
+
+            # initial fill (attempt tasks only)
+            self._fill_with_attempts(pool=pool, problems=problems, inflight=inflight)
+
+            # global event loop
+            while inflight:
+                done_fut = next(as_completed(list(inflight.keys())))
+                info = inflight.pop(done_fut)
+                ps = problems[info.problem_idx]
+
+                if info.kind == "attempt":
+                    self._handle_attempt_done(done_fut=done_fut, pool=pool, problems=problems, inflight=inflight, ps=ps, problem_idx=info.problem_idx, attempt_idx=info.attempt_idx)
+                elif info.kind == "equiv_check":
+                    self._handle_equiv_check_done(done_fut=done_fut, pool=pool, problems=problems, inflight=inflight, ps=ps, problem_idx=info.problem_idx, attempt_idx=info.attempt_idx, against_group_id=info.against_group_id)
+                elif info.kind == "truth_check":
+                    row = self._handle_truth_check_done(done_fut=done_fut, ps=ps)
+                    submission_rows.append(row)
+                else:
+                    raise ValueError(f"Unknown task kind: {info.kind}")
+
+                # schedule truth-checks that became eligible
+                self._maybe_schedule_truth_checks(pool=pool, problems=problems, inflight=inflight)
+
+                # refill capacity with more attempt tasks (policy: attempts are the filler)
+                self._fill_with_attempts(pool=pool, problems=problems, inflight=inflight)
 
         return submission_rows
 
-    # ============================================================
-    # REFACTORED: _run_one_problem split into sub-methods
-    # ============================================================
-    def _run_one_problem(self, ps: ProblemState) -> Dict[str, Any]:
-        self._start_problem(ps)
-
-        pst = self._init_problem_pipeline_state()
-
-        with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
-            self._prime_attempts(ps, pst, pool)
-            self._event_loop_until_grouped(ps, pst, pool)
-
-        return self._finalize_problem(ps, pst)
-
-    # -------------------------
-    # Sub-methods (new)
-    # -------------------------
-    def _start_problem(self, ps: ProblemState) -> None:
+    # ------------------------------------------------------------
+    # Attempt filling / problem-start logging
+    # ------------------------------------------------------------
+    def _log_problem_start_if_needed(self, ps: ProblemState) -> None:
+        if ps.started_logged:
+            return
         ps.solve_started_ts = datetime.now(timezone.utc).isoformat()
         self.logger.log_event("problem_start", {"id": ps.id_value})
-        ps.attempts = []
+        ps.started_logged = True
 
-    def _init_problem_pipeline_state(self) -> ProblemPipelineState:
-        return ProblemPipelineState(
-            grouping_state=PerProblemGroupingState(),
-            attempt_to_group={},
-            attempt_equiv_logs=defaultdict(list),
-            group_weight=defaultdict(float),
-            group_votes=defaultdict(int),
-            inflight_attempts={},
-            inflight_grouping={},
-            next_attempt_idx=0,
-            grouped_count=0,
-        )
+    def _has_more_attempts(self, ps: ProblemState) -> bool:
+        return ps.next_attempt_idx < ps.total_attempts
 
-    def _submit_attempt_if_possible(
-        self,
-        ps: ProblemState,
-        st: ProblemPipelineState,
-        pool: ThreadPoolExecutor,
-    ) -> bool:
-        if st.next_attempt_idx >= ps.total_attempts:
+    def _can_submit_more_attempts_globally(self, inflight: Dict[Future, SchedulerTaskInfo]) -> bool:
+        return len(inflight) < self.cfg.agent_parallelism
+
+    def _submit_attempt(self, *, pool: ThreadPoolExecutor, inflight: Dict[Future, SchedulerTaskInfo], problem_idx: int, ps: ProblemState) -> bool:
+        if not self._has_more_attempts(ps):
             return False
-        attempt_idx = st.next_attempt_idx
+
+        self._log_problem_start_if_needed(ps)
+
+        attempt_idx = ps.next_attempt_idx
+        ps.next_attempt_idx += 1
+
         fut = pool.submit(
             self.solver.run_attempt,
             problem_id=ps.id_value,
             problem_text=ps.problem_text,
             attempt_index=attempt_idx,
         )
-        st.inflight_attempts[fut] = attempt_idx
-        st.next_attempt_idx += 1
+        inflight[fut] = SchedulerTaskInfo(kind="attempt", problem_idx=problem_idx, attempt_idx=attempt_idx)
         return True
 
-    def _refill_capacity(self, ps: ProblemState, st: ProblemPipelineState, pool: ThreadPoolExecutor) -> None:
-        while (len(st.inflight_attempts) + len(st.inflight_grouping)) < self.cfg.agent_parallelism:
-            if not self._submit_attempt_if_possible(ps, st, pool):
+    def _fill_with_attempts(self, *, pool: ThreadPoolExecutor, problems: List[ProblemState], inflight: Dict[Future, SchedulerTaskInfo]) -> None:
+        """
+        Fill remaining global capacity with attempt tasks, in problem order, exhausting each
+        problem's attempts before moving on.
+        """
+        if not self._can_submit_more_attempts_globally(inflight):
+            return
+
+        # iterate all problems here
+        for pidx, ps in enumerate(problems):
+            if not self._can_submit_more_attempts_globally(inflight):
                 break
+            while self._can_submit_more_attempts_globally(inflight) and self._has_more_attempts(ps):
+                self._submit_attempt(pool=pool, inflight=inflight, problem_idx=pidx, ps=ps)
 
-    def _prime_attempts(self, ps: ProblemState, st: ProblemPipelineState, pool: ThreadPoolExecutor) -> None:
-        self._refill_capacity(ps, st, pool)
-
-    def _event_loop_until_grouped(self, ps: ProblemState, st: ProblemPipelineState, pool: ThreadPoolExecutor) -> None:
-        while st.grouped_count < ps.total_attempts:
-            all_futs = list(st.inflight_attempts.keys()) + list(st.inflight_grouping.keys())
-            done_fut = next(as_completed(all_futs))
-
-            if done_fut in st.inflight_attempts:
-                self._handle_attempt_done(ps, st, pool, done_fut)
-            else:
-                self._handle_grouping_done(ps, st, pool, done_fut)
-
+    # ------------------------------------------------------------
+    # Attempt completion -> schedule equivalence pipeline
+    # ------------------------------------------------------------
     def _safe_attempt_record_from_future(self, attempt_idx: int, done_fut: Future) -> dict:
         try:
             return done_fut.result()
         except Exception as exc:
             exc_text = f"future_exception:{type(exc).__name__} msg={exc}"
-            print(f'[warn] {exc_text}')
+            print(f"[warn] {exc_text}")
             return {
                 "Problem ID": "",
                 "Attempt": attempt_idx + 1,
@@ -1541,13 +1557,20 @@ class SequentialProblemScheduler:
                 "Attempt Elapsed MS": 0,
             }
 
+    @staticmethod
+    def _find_attempt_record_in_problem(ps: ProblemState, attempt_idx: int) -> Optional[dict]:
+        for attempt_record in ps.attempts:
+            if int(attempt_record.get("Attempt", -999999999)) == (attempt_idx + 1):
+                return attempt_record
+        return None
+
     def _log_attempt_no_answer(self, ps: ProblemState, attempt_idx: int, attempt_record: dict) -> None:
         ans = attempt_record.get("Answer")
         self.logger.log_attempt(
             {
                 "id": ps.id_value,
                 "attempt": attempt_record.get("Attempt", attempt_idx + 1),
-                "status": "rejected",  # selection decided later
+                "status": "rejected",
                 "reject_reason": f"no_answer:{attempt_record.get('Termination Reason','unknown')}",
                 "pred_final_group_id": -1,
                 "answer_group_id": -1,
@@ -1565,68 +1588,87 @@ class SequentialProblemScheduler:
             }
         )
 
-    def _schedule_grouping(self, ps: ProblemState, st: ProblemPipelineState, pool: ThreadPoolExecutor, attempt_idx: int, answer_text: str) -> None:
-        gfut = pool.submit(
-            run_equivalence_grouping_task,
-            agent=self.agent,
-            problem_text=ps.problem_text,
-            answer_text=answer_text,
-            grouping_state=st.grouping_state,
-        )
-        st.inflight_grouping[gfut] = attempt_idx
-
-    def _handle_attempt_done(self, ps: ProblemState, st: ProblemPipelineState, pool: ThreadPoolExecutor, done_fut: Future) -> None:
-        attempt_idx = st.inflight_attempts.pop(done_fut)
+    def _handle_attempt_done(
+        self,
+        *,
+        done_fut: Future,
+        pool: ThreadPoolExecutor,
+        problems: List[ProblemState],
+        inflight: Dict[Future, SchedulerTaskInfo],
+        ps: ProblemState,
+        problem_idx: int,
+        attempt_idx: int,
+    ) -> None:
         attempt_record = self._safe_attempt_record_from_future(attempt_idx, done_fut)
 
-        # Store attempt now; group id assigned later
         ps.attempts.append(attempt_record)
+        ps.attempts_done += 1
 
         ans = attempt_record.get("Answer")
         if ans is None or str(ans).strip() == "":
-            st.attempt_to_group[attempt_idx] = -1
-            st.grouped_count += 1
+            ps.grouped_done += 1
             self._log_attempt_no_answer(ps, attempt_idx, attempt_record)
-            self._refill_capacity(ps, st, pool)
             return
 
-        self._schedule_grouping(ps, st, pool, attempt_idx, str(ans))
-        self._refill_capacity(ps, st, pool)
-
-    def _log_equivalence_calls(self, ps: ProblemState, attempt_idx: int, gret: dict, st: ProblemPipelineState) -> None:
-        checks = gret.get("checks", []) or []
-        for c in checks:
-            call = c.get("agent_call", {}) or {}
-            self.logger.log_agent_call(
-                kind="equivalence",
-                payload={
-                    "problem_id": ps.id_value,
-                    "attempt": attempt_idx + 1,
-                    "against_group_id": c.get("against_group_id"),
-                    "raw_output": call.get("raw_output", ""),
-                    "parsed_result": call.get("result", {}),
-                    "termination_reason": call.get("termination_reason", ""),
-                },
-            )
-            st.attempt_equiv_logs[attempt_idx].append(call)
-
-    @staticmethod
-    def _find_attempt_record(ps: ProblemState, attempt_idx: int) -> Optional[dict]:
-        # ps.attempts is append-ordered by completion, not attempt_idx; locate by Attempt field
-        for r in ps.attempts:
-            if int(r.get("Attempt", -999999999)) == (attempt_idx + 1):
-                return r
-        return None
-
-    def _update_group_scores(self, gid: int, att_rec: dict, st: ProblemPipelineState) -> None:
-        if gid < 0:
+        # schedule first equivalence check against group 0 (if exists), else schedule group creation
+        if len(ps.grouping_state.groups) == 0:
+            self._create_group(ps, attempt_idx)
             return
-        ent = float(att_rec.get("Entropy", float("inf")))
-        w = 1.0 / max(ent, 1e-9)
-        st.group_weight[gid] += w
-        st.group_votes[gid] += 1
 
-    def _log_attempt_with_group(self, ps: ProblemState, attempt_idx: int, gid: int, att_rec: dict, st: ProblemPipelineState) -> None:
+        against_gid = 0
+        efut = pool.submit(self._equiv_check_task, problem_idx, attempt_idx, against_gid)
+        inflight[efut] = SchedulerTaskInfo(kind="equiv_check", problem_idx=problem_idx, attempt_idx=attempt_idx, against_group_id=against_gid)
+
+    # ------------------------------------------------------------
+    # Equivalence tasks
+    # ------------------------------------------------------------
+    def _equiv_check_task(self, problem_idx: int, attempt_idx: int, against_group_id: int) -> Dict[str, Any]:
+        """
+        Runs one equivalence check: attempt answer vs ONE group representative.
+        Returns a dict including raw_output for logging.
+        """
+        # NOTE: this is executed in the pool thread
+        ps = self._problems_ref[problem_idx]  # set in _handle_equiv_check_done entrypoint
+        att = self._find_attempt_record_in_problem(ps, attempt_idx)
+        ans = str(att.get("Answer") or "")
+        rep = str(ps.grouping_state.groups[against_group_id].rep_text)
+
+        ret = self.agent.check_pair(problem_text=ps.problem_text, answer_a=ans, answer_b=rep)
+        return {
+            "problem_idx": problem_idx,
+            "attempt_idx": attempt_idx,
+            "against_group_id": against_group_id,
+            "agent_call": ret,
+        }
+
+    def _log_equiv_agent_call(self, *, ps: ProblemState, attempt_idx: int, against_group_id: int, agent_call: dict) -> None:
+        self.logger.log_agent_call(
+            kind="equivalence",
+            payload={
+                "problem_id": ps.id_value,
+                "attempt": attempt_idx + 1,
+                "against_group_id": against_group_id,
+                "raw_output": agent_call.get("raw_output", ""),
+                "parsed_result": agent_call.get("result", {}),
+                "termination_reason": agent_call.get("termination_reason", ""),
+            },
+        )
+        ps.attempt_equiv_logs[attempt_idx].append(agent_call)
+
+    def _assign_attempt_to_group(self, *, ps: ProblemState, attempt_idx: int, gid: int) -> None:
+        if gid >= 0 and gid < len(ps.grouping_state.groups):
+            ps.grouping_state.groups[gid].members.append(attempt_idx)
+
+        att_rec = self._find_attempt_record_in_problem(ps, attempt_idx)
+        if gid >= 0:
+            ent = float(att_rec.get("Entropy", float("inf")))
+            w = 1.0 / max(ent, 1e-9)
+            ps.group_weight[gid] += w
+            ps.group_votes[gid] += 1
+
+        ps.grouped_done += 1
+
+        # log attempt now with group id (selection happens later)
         self.logger.log_attempt(
             {
                 "id": ps.id_value,
@@ -1646,80 +1688,127 @@ class SequentialProblemScheduler:
                 "attempt_elapsed_ms": att_rec.get("Attempt Elapsed MS"),
                 "trace": att_rec.get("Trace", {}),
                 "tool_calls": att_rec.get("Tool Calls", []),
-                "equivalence_agent_calls": st.attempt_equiv_logs.get(attempt_idx, []),
+                "equivalence_agent_calls": ps.attempt_equiv_logs.get(attempt_idx, []),
             }
         )
 
-    def _handle_grouping_done(self, ps: ProblemState, st: ProblemPipelineState, pool: ThreadPoolExecutor, done_fut: Future) -> None:
-        attempt_idx = st.inflight_grouping.pop(done_fut)
+    def _handle_equiv_check_done(
+        self,
+        *,
+        done_fut: Future,
+        pool: ThreadPoolExecutor,
+        problems: List[ProblemState],
+        inflight: Dict[Future, SchedulerTaskInfo],
+        ps: ProblemState,
+        problem_idx: int,
+        attempt_idx: int,
+        against_group_id: int,
+    ) -> None:
+        # small hack to let task access problems without pickling the whole list each submit
+        self._problems_ref = problems  # used by _equiv_check_task
 
-        gret = {"group_id": -1, "created_new": False, "checks": []}
         try:
-            gret = done_fut.result()
+            payload = done_fut.result()
         except Exception as exc:
-            gret = {"group_id": -1, "created_new": False, "checks": [], "error": repr(exc)}
+            payload = {
+                "problem_idx": problem_idx,
+                "attempt_idx": attempt_idx,
+                "against_group_id": against_group_id,
+                "agent_call": {
+                    "raw_output": "",
+                    "result": {"equivalent": False, "confidence": 0.0, "reason": f"equiv_future_exception:{type(exc).__name__}"},
+                    "termination_reason": f"equiv_future_exception:{type(exc).__name__} msg={exc}",
+                },
+            }
 
-        gid = int(gret.get("group_id", -1))
-        st.attempt_to_group[attempt_idx] = gid
+        agent_call = payload.get("agent_call", {}) or {}
+        self._log_equiv_agent_call(ps=ps, attempt_idx=attempt_idx, against_group_id=against_group_id, agent_call=agent_call)
 
-        # attach membership if real group
-        if gid >= 0 and gid < len(st.grouping_state.groups):
-            st.grouping_state.groups[gid].members.append(attempt_idx)
+        is_eq = bool(agent_call.get("result", {}).get("equivalent", False))
+        if is_eq:
+            self._assign_attempt_to_group(ps=ps, attempt_idx=attempt_idx, gid=against_group_id)
+            return
 
-        self._log_equivalence_calls(ps, attempt_idx, gret, st)
+        # not equivalent -> schedule next equivalence check, or group creation if exhausted
+        next_gid = against_group_id + 1
+        if next_gid < len(ps.grouping_state.groups):
+            efut = pool.submit(self._equiv_check_task, problem_idx, attempt_idx, next_gid)
+            inflight[efut] = SchedulerTaskInfo(kind="equiv_check", problem_idx=problem_idx, attempt_idx=attempt_idx, against_group_id=next_gid)
+            return
 
-        att_rec = self._find_attempt_record(ps, attempt_idx)
-        if att_rec is None:
-            att_rec = {"Attempt": attempt_idx + 1, "Entropy": None, "Answer": None}
+        # exhausted all existing groups -> create a new one
+        self._create_group(ps, attempt_idx)
 
-        if gid >= 0:
-            self._update_group_scores(gid, att_rec, st)
+    # ------------------------------------------------------------
+    # Group creation
+    # ------------------------------------------------------------
+    def _create_group(
+            self,
+            ps: ProblemState,
+            attempt_idx: int,
+        ) -> None:
+        """
+        Creates a new group whose representative is the attempt's answer text.
+        """
+        attempt_record = self._find_attempt_record_in_problem(ps, attempt_idx)
+        if attempt_record is None:
+            raise ValueError('Tried to create group with an attempt that does not exist in problem records')
+        if "Answer" not in attempt_record:
+            raise ValueError(f'Tried to create group with an attempt that does not not have an answer key: {attempt_record = }')
+        ans = str(attempt_record["Answer"])
 
-        st.grouped_count += 1
-        self._log_attempt_with_group(ps, attempt_idx, gid, att_rec, st)
+        # group_id is next index
+        gid = len(ps.grouping_state.groups)
 
-        self._refill_capacity(ps, st, pool)
+        g = AnswerGroup(group_id=gid, rep_text=ans, members=[])
+        ps.grouping_state.groups.append(g)
 
-    # -------------------------
-    # Finalization helpers
-    # -------------------------
+        self._assign_attempt_to_group(ps=ps, attempt_idx=attempt_idx, gid=gid)
+
+    # ------------------------------------------------------------
+    # Truth-check scheduling and completion
+    # ------------------------------------------------------------
+    def _ready_for_truth_check(self, ps: ProblemState) -> bool:
+        return (
+            (not ps.truth_scheduled)
+            and (not ps.finalized)
+            and (ps.attempts_done >= ps.total_attempts)
+            and (ps.grouped_done >= ps.total_attempts)
+        )
+
     @staticmethod
-    def _compute_vote_df(st: ProblemPipelineState) -> pd.DataFrame:
-        scored = [
-            {"group_id": gid, "votes": st.group_votes[gid], "score": st.group_weight[gid]}
-            for gid in st.group_weight.keys()
-        ]
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        return pd.DataFrame(scored) if scored else pd.DataFrame(columns=["group_id", "votes", "score"])
-
-    @staticmethod
-    def _select_group_id(st: ProblemPipelineState) -> int:
-        if not st.group_weight:
+    def _select_group_id(ps: ProblemState) -> int:
+        if not ps.group_weight:
             return -1
-        # max by score
         best_gid, best_score = -1, None
-        for gid, score in st.group_weight.items():
-            if best_score is None or score > best_score:
+        for gid, score in ps.group_weight.items():
+            if best_score is None or float(score) > best_score:
                 best_gid, best_score = int(gid), float(score)
         return best_gid
 
     @staticmethod
-    def _pick_representative_attempt(ps: ProblemState, grouping_state: PerProblemGroupingState, selected_group_id: int) -> Tuple[Optional[int], Optional[float], Optional[int], str]:
+    def _pick_representative_attempt(ps: ProblemState, selected_group_id: int) -> None:
         """
-        Returns:
-          selected_attempt_idx (0-based attempt_idx), selected_entropy, selected_attempt_number, pred_answer_text
+        Mutates ps.selected_attempt_* and ps.pred_answer_text.
         """
-        if selected_group_id < 0:
-            return None, None, None, ""
+        ps.selected_group_id = selected_group_id
+        ps.selected_attempt_idx = None
+        ps.selected_entropy = None
+        ps.selected_attempt_number = None
+        ps.pred_answer_text = ""
 
-        member_attempt_idxs: List[int] = []
-        for g in grouping_state.groups:
-            if g.group_id == selected_group_id:
-                member_attempt_idxs = list(g.members)
+        if selected_group_id < 0:
+            return
+
+        # members list contains 0-based attempt_idx
+        members: List[int] = []
+        for g in ps.grouping_state.groups:
+            if int(getattr(g, "group_id", -1)) == selected_group_id:
+                members = list(getattr(g, "members", []))
                 break
 
         best = None
-        for attempt_idx in member_attempt_idxs:
+        for attempt_idx in members:
             r = next((x for x in ps.attempts if int(x.get("Attempt", -999999999)) == (attempt_idx + 1)), None)
             if r is None:
                 continue
@@ -1728,89 +1817,83 @@ class SequentialProblemScheduler:
                 best = (attempt_idx, ent, r)
 
         if best is None:
-            return None, None, None, ""
+            return
 
-        selected_idx = best[0]
-        selected_entropy = best[1]
-        selected_attempt_number = int(best[2].get("Attempt", selected_idx + 1))
-        pred_answer_text = str(best[2].get("Answer") or "")
-        return selected_idx, selected_entropy, selected_attempt_number, pred_answer_text
+        ps.selected_attempt_idx = best[0]
+        ps.selected_entropy = best[1]
+        ps.selected_attempt_number = int(best[2].get("Attempt", ps.selected_attempt_idx + 1))
+        ps.pred_answer_text = str(best[2].get("Answer") or "")
 
-    def _truth_check_and_log(
-        self,
-        ps: ProblemState,
-        pred_answer_text: str,
-        selected_attempt_number: Optional[int],
-    ) -> Tuple[Optional[bool], Dict[str, Any]]:
-        if not pred_answer_text.strip():
-            return None, {"note": "no_truth_or_no_pred"}
+    def _truth_check_task(self, problem_idx: int) -> Dict[str, Any]:
+        """
+        Runs the correctness checker for the chosen representative answer (based on group scores).
+        Returns agent output for logging + parsed correctness.
+        """
+        ps = self._problems_ref[problem_idx]
+        selected_gid = self._select_group_id(ps)
+        self._pick_representative_attempt(ps, selected_gid)
 
-        # keep the CURRENT behavior you showed: it assumes truth exists; if you want the old guard, re-add it here
-        chk = self.agent.check_vs_truth(
+        pred = ps.pred_answer_text.strip()
+        truth = (ps.true_answer_text or "").strip()
+
+        if not pred or not truth:
+            return {
+                "problem_idx": problem_idx,
+                "skipped": True,
+                "reason": "no_truth_or_no_pred",
+                "agent_call": {"raw_output": "", "result": {"equivalent": False, "confidence": 0.0, "reason": "no_truth_or_no_pred"}, "termination_reason": "skipped"},
+            }
+
+        agent_call = self.agent.check_vs_truth(
             problem_text=ps.problem_text,
             truth_answer_text=ps.true_answer_text,
-            candidate_answer_text=pred_answer_text,
+            candidate_answer_text=ps.pred_answer_text,
         )
-        self.logger.log_agent_call(
-            kind="truth_check",
-            payload={
-                "problem_id": ps.id_value,
-                "attempt": selected_attempt_number,
-                "raw_output": chk.get("raw_output", ""),
-                "parsed_result": chk.get("result", {}),
-                "termination_reason": chk.get("termination_reason", ""),
-            },
-        )
-        is_correct = bool(chk.get("result", {}).get("equivalent", False))
-        checker_summary = {
-            "equivalent": chk.get("result", {}).get("equivalent", False),
-            "confidence": chk.get("result", {}).get("confidence", 0.0),
-            "reason": chk.get("result", {}).get("reason", ""),
-            "termination_reason": chk.get("termination_reason", ""),
-            "raw_output": chk.get("raw_output", ""),
-        }
-        return is_correct, checker_summary
+        return {"problem_idx": problem_idx, "skipped": False, "agent_call": agent_call}
 
-    def _finalize_problem(self, ps: ProblemState, st: ProblemPipelineState) -> Dict[str, Any]:
+    def _maybe_schedule_truth_checks(self, *, pool: ThreadPoolExecutor, problems: List[ProblemState], inflight: Dict[Future, SchedulerTaskInfo]) -> None:
+        self._problems_ref = problems  # for tasks
+
+        for pidx, ps in enumerate(problems):
+            if not self._can_submit_more_attempts_globally(inflight):
+                return
+            if self._ready_for_truth_check(ps):
+                ps.truth_scheduled = True
+                tfut = pool.submit(self._truth_check_task, pidx)
+                inflight[tfut] = SchedulerTaskInfo(kind="truth_check", problem_idx=pidx)
+
+    def _finalize_problem_and_log_solution(self, ps: ProblemState) -> Dict[str, Any]:
         ps.solve_finished_ts = datetime.now(timezone.utc).isoformat()
         try:
             ps.solve_elapsed_ms = int(
-                (datetime.fromisoformat(ps.solve_finished_ts) - datetime.fromisoformat(ps.solve_started_ts)).total_seconds()
-                * 1000
+                (datetime.fromisoformat(ps.solve_finished_ts) - datetime.fromisoformat(ps.solve_started_ts)).total_seconds() * 1000
             )
         except Exception:
             ps.solve_elapsed_ms = 0
 
-        vote_df = self._compute_vote_df(st)
-        selected_group_id = self._select_group_id(st)
-
-        selected_idx, selected_entropy, selected_attempt_number, pred_answer_text = self._pick_representative_attempt(
-            ps, st.grouping_state, selected_group_id
-        )
-
-        is_correct, checker_summary = self._truth_check_and_log(ps, pred_answer_text, selected_attempt_number)
-
-        equivalence_groups = st.grouping_state.to_json()
-        equivalence_groups["selected_group_id"] = selected_group_id
-
+        # vote summary
+        scored = [{"group_id": gid, "votes": ps.group_votes[gid], "score": ps.group_weight[gid]} for gid in ps.group_weight.keys()]
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        vote_df = pd.DataFrame(scored) if scored else pd.DataFrame(columns=["group_id", "votes", "score"])
         vote_summary = {}
         try:
             vote_summary = {"top": vote_df.head(10).to_dict(orient="records")}
         except Exception:
             vote_summary = {}
 
+        equivalence_groups = ps.grouping_state.to_json()
+        equivalence_groups["selected_group_id"] = ps.selected_group_id
+
         attempts_total = len(ps.attempts)
-        attempts_with_answer = sum(
-            1 for r in ps.attempts if r.get("Answer") is not None and str(r.get("Answer")).strip() != ""
-        )
+        attempts_with_answer = sum(1 for r in ps.attempts if (r.get("Answer") is not None and str(r.get("Answer")).strip() != ""))
 
         self.logger.log_solution_row(
             id_value=ps.id_value,
-            pred_answer_text=pred_answer_text,
+            pred_answer_text=ps.pred_answer_text,
             true_answer_text=ps.true_answer_text,
-            is_correct=is_correct,
-            selected_attempt=selected_attempt_number,
-            selected_entropy=selected_entropy,
+            is_correct=ps.is_correct,
+            selected_attempt=ps.selected_attempt_number,
+            selected_entropy=ps.selected_entropy,
             solve_started_ts=ps.solve_started_ts,
             solve_finished_ts=ps.solve_finished_ts,
             solve_elapsed_ms=ps.solve_elapsed_ms,
@@ -1818,162 +1901,56 @@ class SequentialProblemScheduler:
             attempts_with_answer=attempts_with_answer,
             vote_summary=vote_summary,
             equivalence_groups=equivalence_groups,
-            checker_summary=checker_summary,
+            checker_summary=ps.checker_summary,
+        )
+        self.logger.log_event("problem_end", {"id": ps.id_value, "pred": ps.pred_answer_text, "correct": ps.is_correct})
+        ps.finalized = True
+        return {"id": ps.id_value, "answer": ps.pred_answer_text}
+
+    def _handle_truth_check_done(self, *, done_fut: Future, ps: ProblemState) -> Dict[str, Any]:
+        try:
+            payload = done_fut.result()
+        except Exception as exc:
+            payload = {
+                "skipped": False,
+                "agent_call": {
+                    "raw_output": "",
+                    "result": {"equivalent": False, "confidence": 0.0, "reason": f"truth_future_exception:{type(exc).__name__}"},
+                    "termination_reason": f"truth_future_exception:{type(exc).__name__} msg={exc}",
+                },
+            }
+
+        agent_call = payload.get("agent_call", {}) or {}
+
+        # Always log raw truth-check agent output (even if skipped)
+        self.logger.log_agent_call(
+            kind="truth_check",
+            payload={
+                "problem_id": ps.id_value,
+                "attempt": ps.selected_attempt_number,
+                "raw_output": agent_call.get("raw_output", ""),
+                "parsed_result": agent_call.get("result", {}),
+                "termination_reason": agent_call.get("termination_reason", ""),
+            },
         )
 
-        self.logger.log_event("problem_end", {"id": ps.id_value, "pred": pred_answer_text, "correct": is_correct})
-        return {"id": ps.id_value, "answer": pred_answer_text}
-
-# ============================================================
-# Ensembling with equivalence grouping (new)
-# ============================================================
-def ensemble_with_equivalence(
-    *,
-    agent: AnswerEquivalenceAgent,
-    problem_text: str,
-    attempts: List[dict],
-) -> Tuple[int, Optional[int], pd.DataFrame, Dict[str, Any], Dict[int, int]]:
-    """
-    Cluster attempts by semantic equivalence of their Answer texts.
-    Then score *groups* by sum(1/entropy), choose best group.
-
-    Returns:
-      - selected_group_id
-      - selected_attempt_index (representative attempt: lowest entropy within selected group)
-      - vote_df: rows per group (group_id, votes, score)
-      - equivalence_groups: JSON-ish details (group repr texts, membership)
-      - attempt_to_group: mapping attempt_index -> group_id
-    """
-    # Candidates: only attempts with non-empty Answer.
-    ans_texts: List[Optional[str]] = [a.get("Answer") for a in attempts]
-
-    # Grouping strategy: incremental clustering against group representatives.
-    groups: List[Dict[str, Any]] = []  # each: {"group_id": int, "rep_text": str, "members": [idxs]}
-    attempt_to_group: Dict[int, int] = {}
-
-    def is_equivalent(a: str, b: str) -> bool:
-        if a.strip() == b.strip():
-            return True
-        res = agent.check_pair(problem_text=problem_text, answer_a=a, answer_b=b)
-        return bool(res.get("result", {}).get("equivalent", False))
-
-    for i, txt in enumerate(ans_texts):
-        if txt is None or str(txt).strip() == "":
-            continue
-
-        placed = False
-        for g in groups:
-            if is_equivalent(str(txt), str(g["rep_text"])):
-                g["members"].append(i)
-                attempt_to_group[i] = int(g["group_id"])
-                placed = True
-                break
-
-        if not placed:
-            gid = len(groups)
-            groups.append({"group_id": gid, "rep_text": str(txt), "members": [i]})
-            attempt_to_group[i] = gid
-
-    # Score groups by weight=1/entropy (same as before, but aggregated per group)
-    group_weights: Dict[int, float] = defaultdict(float)
-    group_votes: Dict[int, int] = defaultdict(int)
-
-    for i, att in enumerate(attempts):
-        if i not in attempt_to_group:
-            continue
-        gid = attempt_to_group[i]
-        ent = float(att.get("Entropy", float("inf")))
-        w = 1.0 / max(ent, 1e-9)
-        group_weights[gid] += w
-        group_votes[gid] += 1
-
-    scored = [{"group_id": gid, "votes": group_votes[gid], "score": group_weights[gid]} for gid in group_weights.keys()]
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    vote_df = pd.DataFrame(scored) if scored else pd.DataFrame(columns=["group_id", "votes", "score"])
-
-    if not scored:
-        # no valid answers -> group 0 sentinel, no selected attempt
-        equivalence_groups = {"groups": [], "note": "no_nonempty_answers"}
-        return 0, None, vote_df, equivalence_groups, attempt_to_group
-
-    selected_group_id = int(scored[0]["group_id"])
-
-    # Representative attempt for selected group: minimum entropy among its members
-    members = []
-    for g in groups:
-        if int(g["group_id"]) == selected_group_id:
-            members = list(g["members"])
-            break
-
-    candidates = [(i, float(attempts[i].get("Entropy", float("inf")))) for i in members]
-    selected_attempt_index = min(candidates, key=lambda x: x[1])[0] if candidates else None
-
-    equivalence_groups = {
-        "groups": [
-            {
-                "group_id": int(g["group_id"]),
-                "rep_text": g["rep_text"],
-                "members": list(g["members"]),
+        skipped = bool(payload.get("skipped", False))
+        if skipped:
+            ps.is_correct = None
+            ps.checker_summary = {"note": payload.get("reason", "no_truth_or_no_pred")}
+        else:
+            ps.is_correct = bool(agent_call.get("result", {}).get("equivalent", False))
+            ps.checker_summary = {
+                "equivalent": agent_call.get("result", {}).get("equivalent", False),
+                "confidence": agent_call.get("result", {}).get("confidence", 0.0),
+                "reason": agent_call.get("result", {}).get("reason", ""),
+                "termination_reason": agent_call.get("termination_reason", ""),
+                "raw_output": agent_call.get("raw_output", ""),
             }
-            for g in groups
-        ],
-        "selected_group_id": selected_group_id,
-    }
 
-    return selected_group_id, selected_attempt_index, vote_df, equivalence_groups, attempt_to_group
+        ps.truth_done = True
+        return self._finalize_problem_and_log_solution(ps)
 
-
-# ============================================================
-# CLI (CHANGED: rename solver_parallelism -> agent_parallelism; remove attempt_threads arg)
-# ============================================================
-def parse_args() -> CFG:
-    p = argparse.ArgumentParser(
-        description="AIMO3 solver with sequential per-problem attempts + async equivalence/correctness tasks (text answers)."
-    )
-
-    # === placeholder ===
-    # description of [parse_args: keep all existing args unchanged up to Decoding/sampling] that I need to paste here
-    # === placeholder ===
-
-    # Parallelism knobs
-    p.add_argument(
-        "--agent-parallelism",
-        dest="agent_parallelism",
-        type=int,
-        default=CFG.agent_parallelism,
-        help="Global cap on concurrent tasks: attempts + equivalence checks + truth checks.",
-    )
-    p.add_argument(
-        "--jupyter-kernels",
-        dest="kernel_workers",
-        type=int,
-        default=CFG.kernel_workers,
-        help="Number of persistent Jupyter kernels to pre-initialize. Must be >= agent-parallelism.",
-    )
-    p.add_argument(
-        "--preload-workers",
-        dest="preload_workers",
-        type=int,
-        default=CFG.preload_workers,
-        help="Thread count used to page-cache model weights from disk before starting vLLM.",
-    )
-
-    # === placeholder ===
-    # description of [parse_args: keep remaining args unchanged (max_problems, verbose/quiet)] that I need to paste here
-    # === placeholder ===
-
-    args = p.parse_args()
-
-    cfg = CFG(
-        # === placeholder ===
-        # description of [CFG construction in parse_args: paste all existing fields, but remove attempt_threads and replace solver_parallelism with agent_parallelism=args.agent_parallelism]
-        # === placeholder ===
-        agent_parallelism=args.agent_parallelism,
-        kernel_workers=args.kernel_workers,
-        preload_workers=args.preload_workers,
-        verbose=(False if args.quiet else args.verbose),
-    )
-    return cfg
 
 # ============================================================
 # CLI
@@ -2177,7 +2154,7 @@ def main():
             )
         )
 
-    scheduler = SequentialProblemScheduler(cfg=cfg, solver=solver, logger=logger)
+    scheduler = ProblemScheduler(cfg=cfg, solver=solver, logger=logger)
 
     gc.disable()
     try:
