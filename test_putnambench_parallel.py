@@ -16,10 +16,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, Any, Dict, List, Tuple, Iterable, Set
 
-import pandas as pd
 import polars as pl
 from openai import OpenAI
-from transformers import set_seed
 from jupyter_client import KernelManager
 from collections import defaultdict
 from concurrent.futures import as_completed, ThreadPoolExecutor, Future
@@ -120,7 +118,7 @@ class CFG:
         "- Test your answer with simple cases or special values when possible\n"
         "- Ensure dimensional consistency and reasonableness of the result\n\n"
         "# Output Format:\n"
-        "Place your final answer inside \boxed{...}, e.g., \boxed{There is no such function.} or \boxed{\frac{4\pi}{\log 2}}.\n\n"
+        "Place your final answer inside \\boxed{...}, e.g., \\boxed{There is no such function.} or \\boxed{\\frac{4\\pi}{\\log 2}}.\n\n"
         "Think step-by-step and show your complete reasoning process. Quality of reasoning "
         "is as important as the final answer."
     )
@@ -135,7 +133,7 @@ class CFG:
         "The environment is a stateful Jupyter notebook. Code persists between executions.\n"
         "Always use print() to display results. Write clear, well-commented code.\n\n"
         "Remember: Code should support your mathematical reasoning, not replace it. "
-        "Explain what you\"re computing and why before running code."
+        "Explain what you're computing and why before running code."
     )
 
     preference_prompt: str = (
@@ -1395,6 +1393,7 @@ class ProblemScheduler:
 
             # global event loop
             while inflight:
+                print(f"Completed: {sum([p.finalized for p in self.problems]) / len(self.problems) * 100:.2f}%")
                 done_fut = next(as_completed(list(inflight.keys())))
                 info = inflight.pop(done_fut)
                 ps = self.problems[info.problem_idx]
@@ -1434,7 +1433,7 @@ class ProblemScheduler:
         if ps.started_logged:
             return
         ps.solve_started_ts = datetime.now(timezone.utc).isoformat()
-        self.logger.log_event("problem_start", {"id": ps.id_value})
+        self.logger.log_event("problem_start", {"id": ps.id_value, "msg": f"Problem id: {ps.id_value}"})
         ps.started_logged = True
 
     def _has_more_attempts(self, ps: ProblemState) -> bool:
@@ -1681,9 +1680,9 @@ class ProblemScheduler:
                 },
             },
         )
-        self.logger.log_event("problem_end", {"id": ps.id_value, "pred": ps.pred_answer_text, "correct": ps.is_correct})
+        self.logger.log_event("problem_end", {"id": ps.id_value, "msg": f"Problem id: {ps.id_value}"})
         ps.finalized = True
-        return {"id": ps.id_value, "answer": ps.pred_answer_text}
+        return {"id": ps.id_value, "solve_elapsed_ms": ps.solve_elapsed_ms}
 
 # ============================================================
 # CLI
@@ -1853,8 +1852,6 @@ def main():
     attempts_path = str(log_dir / cfg.attempts_filename)
     solutions_path = str(log_dir / cfg.solutions_filename)
     submission_path = str(log_dir / cfg.submission_filename)
-
-    set_seed(cfg.seed)
 
     reference_df = pl.read_csv(cfg.reference_path)
     if "id" not in reference_df.columns or "problem" not in reference_df.columns:
