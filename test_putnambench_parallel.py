@@ -1253,7 +1253,7 @@ class AnswerEquivalenceAgent:
                 # try parse from this turn
                 completion_text = turns_compact[-1]["completion_text"]
                 parsed = extract_checker_json_from_text(completion_text)
-                if parsed.get("reason") != "no_json_found":
+                if not parsed.get("reason", "").startswith("Error: "):
                     termination_reason = "checker_json_parsed"
                     raw_output = "\n".join(t.get("completion_text", "") for t in turns_compact)
                     return {
