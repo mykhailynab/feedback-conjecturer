@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -89,7 +89,12 @@ def normalize_checker_result(obj: Any) -> Dict[str, Any]:
     if "equivalent" not in obj:
         raise ValueError('"equivalent" missing from checker output')
 
-    equivalent = bool(obj["equivalent"])
+    raw_equivalent = obj["equivalent"]
+    if isinstance(raw_equivalent, bool):
+        equivalent = raw_equivalent
+    else:
+        raise ValueError(f'invalid value for "equivalent": {raw_equivalent!r}')
+
     confidence = float(obj.get("confidence", 0.0))
     reason = str(obj.get("reason", ""))
 
@@ -102,15 +107,82 @@ def normalize_checker_result(obj: Any) -> Dict[str, Any]:
     }
 
 
+def parse_partial_checker_result_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Checker-specific fallback for malformed / truncated JSON.
+
+    Supports patterns like:
+      {"equivalent": true, "confidence": 0.87
+      {"equivalent": false
+    and normalizes them into the expected result shape.
+    """
+    if not text:
+        return None
+
+    text = text.strip()
+
+    # Case 1:
+    #   {"equivalent": true/false, "confidence": 0.123
+    pattern_with_conf = re.compile(
+        r'\{\s*"equivalent"\s*:\s*(true|false)\s*,\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+        flags=re.DOTALL,
+    )
+
+    candidates_with_conf = list(pattern_with_conf.finditer(text))
+    for candidate in reversed(candidates_with_conf):
+        equivalent_str = candidate.group(1)
+        confidence_str = candidate.group(2)
+
+        obj = {
+            "equivalent": equivalent_str == "true",
+            "confidence": float(confidence_str),
+            "reason": "",
+        }
+
+        try:
+            return normalize_checker_result(obj)
+        except Exception:
+            continue
+
+    # Case 2:
+    #   {"equivalent": true/false
+    pattern_only_equivalent = re.compile(
+        r'\{\s*"equivalent"\s*:\s*(true|false)',
+        flags=re.DOTALL,
+    )
+
+    candidates_only_equivalent = list(pattern_only_equivalent.finditer(text))
+    for candidate in reversed(candidates_only_equivalent):
+        equivalent_str = candidate.group(1)
+
+        obj = {
+            "equivalent": equivalent_str == "true",
+            "confidence": 0.0,
+            "reason": "",
+        }
+
+        try:
+            return normalize_checker_result(obj)
+        except Exception:
+            continue
+
+    return None
+
+
 def parse_checker_result_from_text(text: str) -> Optional[Dict[str, Any]]:
     parsed = extract_json_object_from_text(
         text,
-        preferred_key="equivalent",
+        required_key="equivalent",
         validator=normalize_checker_result,
     )
-    if parsed is None:
-        return None
-    return parsed
+    if parsed is not None:
+        return parsed
+
+    parsed_partial = parse_partial_checker_result_from_text(text)
+    if parsed_partial is not None:
+        return parsed_partial
+
+    return None
 
 
 def fallback_checker_error_result(reason: str) -> Dict[str, Any]:

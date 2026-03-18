@@ -114,13 +114,13 @@ def extract_last_boxed_content(text: str) -> Optional[str]:
 def extract_json_object_from_text(
     text: str,
     *,
-    preferred_key: Optional[str] = None,
+    required_key: Optional[str] = None,
     validator: Optional[Callable[[Any], Any]] = None,
 ) -> Optional[Any]:
     """
     Robustly locate a JSON object inside arbitrary text.
 
-    If preferred_key is provided, candidates containing that key are preferred.
+    If required_key is provided, only candidates containing that key are concidered.
     If validator is provided, it should either return a normalized object or raise.
     """
     if not text:
@@ -129,8 +129,8 @@ def extract_json_object_from_text(
     text = text.strip()
 
     def _accept(obj: Any) -> Optional[Any]:
-        if preferred_key is not None:
-            if not isinstance(obj, dict) or preferred_key not in obj:
+        if required_key is not None:
+            if not isinstance(obj, dict) or required_key not in obj:
                 return None
         if validator is None:
             return obj
@@ -152,7 +152,7 @@ def extract_json_object_from_text(
     candidates = list(re.finditer(r"\{.*?\}", text, flags=re.DOTALL))
     for m in reversed(candidates):
         chunk = m.group(0)
-        if preferred_key is not None and f'"{preferred_key}"' not in chunk:
+        if required_key is not None and f'"{required_key}"' not in chunk:
             continue
         try:
             obj = json.loads(chunk)
