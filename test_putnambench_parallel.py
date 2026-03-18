@@ -63,7 +63,7 @@ class CFG:
     sandbox_timeout: int = 3
 
     # attempt + checker timeouts
-    attempt_timeout_seconds: int = 300
+    attempt_timeout_seconds: int = 600
     checker_timeout_seconds: int = 120
 
     # Decoding / sampling / batching
@@ -618,31 +618,107 @@ def extract_last_boxed_content(text: str) -> Optional[str]:
     return None
 
 
-def parse_checker_json_line(s: str) -> Dict[str, Any]:
-    """
-    Checker MUST emit a single JSON line.
-    We robustly try to locate a JSON object on any line.
-    """
-    if not s:
-        return {"equivalent": False, "confidence": 0.0, "reason": "empty_checker_output"}
-
-    # Prefer the first {...} span.
-    m = re.search(r"\{.*\}", s.strip(), flags=re.DOTALL)
-    if not m:
-        return {"equivalent": False, "confidence": 0.0, "reason": "no_json_found"}
+def _normalize_checker_obj(obj: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(obj, dict):
+        raise ValueError("obj is not a dict")
+    if "equivalent" not in obj:
+        raise ValueError("\"equivalent\" not in obj")
     try:
-        obj = json.loads(m.group(0))
-        eq = bool(obj.get("equivalent", False))
+        eq = bool(obj["equivalent"])
         conf = float(obj.get("confidence", 0.0))
         reason = str(obj.get("reason", ""))
-        # clamp confidence
-        if conf < 0.0:
-            conf = 0.0
-        if conf > 1.0:
-            conf = 1.0
+        conf = max(0.0, min(1.0, conf))
         return {"equivalent": eq, "confidence": conf, "reason": reason}
-    except Exception as exc:
-        return {"equivalent": False, "confidence": 0.0, "reason": f"json_parse_error:{type(exc).__name__}"}
+    except Exception as e:
+        raise e
+
+
+def extract_checker_json_from_text(text: str) -> Dict[str, Any]:
+    """
+    Checker MUST emit a single JSON line.
+    Robustly locate a JSON object, preferring ones that contain the key "equivalent".
+    """
+    if not text:
+        return {"equivalent": False, "confidence": 0.0, "reason": "Error: empty_checker_output"}
+
+    text = text.strip()
+
+    last_err: Optional[BaseException] = None
+
+    # Fast path: try parsing the entire string as JSON (works if checker truly outputs only JSON)
+    try:
+        obj = json.loads(text)
+    except Exception:
+        obj = None  # ignore exception if not a json.
+    try:
+        if obj is not None:
+            return _normalize_checker_obj(obj)
+    except Exception as e:
+        last_err = e
+
+    candidates = list(re.finditer(r"\{.*?\}", text, flags=re.DOTALL))
+
+    for m in reversed(candidates):
+        chunk = m.group(0)
+        # if do_debug:
+        #     print(f"Candidate 1: {chunk}")
+        if '"equivalent"' not in chunk:
+            continue
+        try:
+            obj = json.loads(chunk)
+        except Exception as e:
+            continue  # ignore exception if not a json.
+        try:
+            return _normalize_checker_obj(obj)
+        except Exception as e:
+            last_err = e
+            continue
+
+    decoder = json.JSONDecoder()
+    for i in reversed([i for i, ch in enumerate(text) if ch == "{"]):
+        try:
+            obj, end = decoder.raw_decode(text[i:])  # can have extra text at the end
+        except Exception:
+            continue  # ignore exception if not a json.
+        try:
+            return _normalize_checker_obj(obj)
+        except Exception as e:
+            last_err = e
+            continue
+    
+    pattern = re.compile(r'\{\s*"equivalent"\s*:\s*(true|false)\s*,\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)', flags=re.DOTALL)
+    candidates_noreason = list(pattern.finditer(text))
+    for c in candidates_noreason:
+        m_text = c.group(0) + '}'
+        try:
+            obj = json.loads(m_text)
+        except Exception as e:
+            continue  # ignore exception if not a json.
+        try:
+            return _normalize_checker_obj(obj)
+        except Exception as e:
+            last_err = e
+            continue
+
+    pattern = re.compile(r'\{\s*"equivalent"\s*:\s*(true|false)', flags=re.DOTALL)
+    candidates_onlyeq = list(pattern.finditer(text))
+    for c in candidates_onlyeq:
+        m_text = c.group(0) + '}'
+        try:
+            obj = json.loads(m_text)
+        except Exception as e:
+            continue  # ignore exception if not a json.
+        try:
+            return _normalize_checker_obj(obj)
+        except Exception as e:
+            last_err = e
+            continue
+
+    return {
+        "equivalent": False,
+        "confidence": 0.0,
+        "reason": f"Error: {type(last_err).__name__}: {last_err}" if last_err is not None else "Error: no_json_found"
+    }
 
 
 # ============================================================
@@ -1176,7 +1252,7 @@ class AnswerEquivalenceAgent:
 
                 # try parse from this turn
                 completion_text = turns_compact[-1]["completion_text"]
-                parsed = parse_checker_json_line(completion_text)
+                parsed = extract_checker_json_from_text(completion_text)
                 if parsed.get("reason") != "no_json_found":
                     termination_reason = "checker_json_parsed"
                     raw_output = "\n".join(t.get("completion_text", "") for t in turns_compact)
@@ -1190,7 +1266,7 @@ class AnswerEquivalenceAgent:
 
             # fallback: parse concat
             raw_output = "\n".join(t.get("completion_text", "") for t in turns_compact)
-            parsed = parse_checker_json_line(raw_output)
+            parsed = extract_checker_json_from_text(raw_output)
             return {
                 "result": parsed,
                 "raw_output": raw_output,
