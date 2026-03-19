@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from jupyter_client import KernelManager
 from openai_harmony import ToolNamespaceConfig
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     ToolDispatchResult,
     ToolInvocation,
     make_tool_message,

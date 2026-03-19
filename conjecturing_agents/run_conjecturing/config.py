@@ -4,18 +4,18 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from argparse import ArgumentParser
 
-from conjecturering_agents.agents.solver import SolverAgent, SolverAgentConfig
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.agents.solver import SolverAgent, SolverAgentConfig
+from conjecturing_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackendConfig,
 )
-from conjecturering_agents.tool_calling_backends.jupyter import JupyterKernelConfig
+from conjecturing_agents.tool_calling_backends.jupyter import JupyterKernelConfig
 
-from conjecturering_agents.agents.informal_correctness_checker import (
+from conjecturing_agents.agents.informal_correctness_checker import (
     InformalCorrectnessCheckerAgent,
     InformalCorrectnessCheckerConfig,
 )
 
-from conjecturering_agents.run_conjecturing.problem_scheduler import (
+from conjecturing_agents.run_conjecturing.problem_scheduler import (
     ProblemState
 )
 

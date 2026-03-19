@@ -7,17 +7,17 @@ from typing import Any, Dict, List
 
 import polars as pl
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackend,
 )
-from conjecturering_agents.run_conjecture_formalization.config import (
+from conjecturing_agents.run_conjecture_formalization.config import (
     parse_args_and_validate,
     make_backend_config,
 )
-from conjecturering_agents.run_conjecture_formalization.formalization_scheduler import (
+from conjecturing_agents.run_conjecture_formalization.formalization_scheduler import (
     FormalizationScheduler,
 )
-from conjecturering_agents.run_conjecture_formalization.logger import (
+from conjecturing_agents.run_conjecture_formalization.logger import (
     RunLogger,
 )
 

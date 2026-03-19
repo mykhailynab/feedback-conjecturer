@@ -11,21 +11,21 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import polars as pl
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackend,
 )
 
-from conjecturering_agents.run_conjecturing.problem_scheduler import (
+from conjecturing_agents.run_conjecturing.problem_scheduler import (
     ProblemState,
     ProblemScheduler
 )
 
-from conjecturering_agents.run_conjecturing.config import (
+from conjecturing_agents.run_conjecturing.config import (
     parse_args_and_validate,
     make_backend_config,
 )
 
-from conjecturering_agents.run_conjecturing.logger import (
+from conjecturing_agents.run_conjecturing.logger import (
     RunLogger,
 )
 

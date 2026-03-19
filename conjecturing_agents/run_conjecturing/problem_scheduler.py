@@ -5,22 +5,22 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackend,
 )
-from conjecturering_agents.tools import to_float_or_inf
+from conjecturing_agents.tools import to_float_or_inf
 
-from conjecturering_agents.run_conjecturing.config import (
+from conjecturing_agents.run_conjecturing.config import (
     RunConfig,
     make_solver_agent,
     make_checker_agent,
 )
 
-from conjecturering_agents.run_conjecturing.logger import (
+from conjecturing_agents.run_conjecturing.logger import (
     RunLogger,
 )
 
-from conjecturering_agents.agents.solver import (
+from conjecturing_agents.agents.solver import (
     SolverAgent,
 )
 

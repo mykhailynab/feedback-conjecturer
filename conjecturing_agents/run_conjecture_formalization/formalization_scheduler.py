@@ -6,23 +6,23 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from conjecturering_agents.agents.conjecture_formalizer import (
+from conjecturing_agents.agents.conjecture_formalizer import (
     extract_abbrev_name_from_statement,
     extract_ground_truth_comment_and_strip_line,
     replace_abbrev_in_statement,
 )
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackend,
 )
-from conjecturering_agents.run_conjecture_formalization.config import (
+from conjecturing_agents.run_conjecture_formalization.config import (
     RunConjectureFormalizationConfig,
     make_formalizer_agent,
     make_lean_compiler_config,
 )
-from conjecturering_agents.run_conjecture_formalization.logger import (
+from conjecturing_agents.run_conjecture_formalization.logger import (
     RunLogger,
 )
-from conjecturering_agents.tool_calling_backends.lean4_compiler import (
+from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     Lean4CompilerBackend,
     build_tool_facing_feedback,
 )

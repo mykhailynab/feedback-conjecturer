@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from openai_harmony import ToolNamespaceConfig
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     ToolDispatchResult,
     ToolInvocation,
     make_tool_message,
@@ -63,7 +63,7 @@ class LeanCompilerConfig:
     project_dir: str
 
     # Where temporary source files are created inside project_dir
-    workspace_subdir: str = ".conjecturering_agents/lean_tool_runs"
+    workspace_subdir: str = ".conjecturing_agents/lean_tool_runs"
 
     # Compilation command settings
     timeout_seconds: int = 120

@@ -4,17 +4,17 @@ from argparse import ArgumentParser
 from dataclasses import dataclass
 from typing import Optional
 
-from conjecturering_agents.agents.conjecture_formalizer import (
+from conjecturing_agents.agents.conjecture_formalizer import (
     ConjectureFormalizerAgent,
     ConjectureFormalizerConfig,
 )
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackendConfig,
 )
-from conjecturering_agents.tool_calling_backends.jupyter import (
+from conjecturing_agents.tool_calling_backends.jupyter import (
     JupyterKernelConfig,
 )
-from conjecturering_agents.tool_calling_backends.lean4_compiler import (
+from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     LeanCompilerConfig,
 )
 
@@ -91,7 +91,7 @@ class RunConjectureFormalizationConfig:
     lean_project_dir: str = "."
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
-    lean_workspace_subdir: str = ".conjecturering_agents/lean_tool_runs"
+    lean_workspace_subdir: str = ".conjecturing_agents/lean_tool_runs"
 
     # -----------------------------
     # Logging

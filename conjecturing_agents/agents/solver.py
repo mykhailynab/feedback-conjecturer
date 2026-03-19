@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from openai_harmony import Message, ReasoningEffort, ToolNamespaceConfig
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     HarmonyAgentSpec,
     HarmonyRunResult,
     HarmonySessionState,
@@ -13,7 +13,7 @@ from conjecturering_agents.inference_backends.vllm_harmony import (
     VLLMHarmonyBackend,
     extract_last_boxed_content,
 )
-from conjecturering_agents.tool_calling_backends.jupyter import (
+from conjecturing_agents.tool_calling_backends.jupyter import (
     JupyterKernelConfig,
     JupyterToolBackend,
 )

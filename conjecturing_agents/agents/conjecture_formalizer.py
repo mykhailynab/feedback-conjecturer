@@ -6,18 +6,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openai_harmony import Message, ReasoningEffort, ToolNamespaceConfig
 
-from conjecturering_agents.inference_backends.vllm_harmony import (
+from conjecturing_agents.inference_backends.vllm_harmony import (
     HarmonyAgentSpec,
     HarmonyRunResult,
     HarmonySessionState,
     TerminationSignal,
     VLLMHarmonyBackend,
 )
-from conjecturering_agents.tool_calling_backends.jupyter import (
+from conjecturing_agents.tool_calling_backends.jupyter import (
     JupyterKernelConfig,
     JupyterToolBackend,
 )
-from conjecturering_agents.tool_calling_backends.lean4_compiler import (
+from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     LeanCompilerConfig,
     Lean4CompilerToolBackend,
     extract_lean_code_block_or_text,
