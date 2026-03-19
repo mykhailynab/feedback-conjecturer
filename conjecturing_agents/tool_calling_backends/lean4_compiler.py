@@ -67,7 +67,7 @@ class LeanCompilerConfig:
 
     # Compilation command settings
     timeout_seconds: int = 120
-    lean_jobs: int = 12
+    lean_jobs: int = 4
 
     # Tool wiring
     recipient_name: str = "lean"

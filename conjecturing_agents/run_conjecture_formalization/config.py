@@ -90,7 +90,7 @@ class RunConjectureFormalizationConfig:
     # -----------------------------
     lean_project_dir: str = "."
     lean_timeout_seconds: int = 120
-    lean_jobs: int = 12
+    lean_jobs: int = 4
     lean_workspace_subdir: str = ".conjecturering_agents/lean_tool_runs"
 
     # -----------------------------
