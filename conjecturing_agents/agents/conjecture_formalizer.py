@@ -81,7 +81,8 @@ _SINGLE_LINE_ABBREV_RE = re.compile(
     re.MULTILINE,
 )
 _ABBREV_WITH_COMMENT_RE = re.compile(
-    r"(?P<abbrev_line>^[ \t]*abbrev[^\n]*:=.*\n)(?P<comment_line>^[ \t]*--[^\n]*\n?)",
+    r"(?P<abbrev_line>^[ \t]*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev[^\n]*:=.*\r?\n)"
+    r"(?P<comment_line>^[ \t]*--[^\n]*\r?\n?)",
     re.MULTILINE,
 )
 _TOP_LEVEL_DECL_RE = re.compile(
