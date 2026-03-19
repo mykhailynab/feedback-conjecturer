@@ -75,9 +75,12 @@ DEFAULT_CONJECTURE_FORMALIZER_LEAN_TOOL_PROMPT = (
 # Regex helpers / parsing utilities
 # ============================================================
 
-_ABBREV_NAME_RE = re.compile(r"^\s*abbrev\s+([A-Za-z0-9_']+)\b", re.MULTILINE)
+_ABBREV_NAME_RE = re.compile(
+    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([A-Za-z0-9_']+)\b",
+    re.MULTILINE,
+)
 _SINGLE_LINE_ABBREV_RE = re.compile(
-    r"^\s*abbrev\s+([A-Za-z0-9_']+)\b[^\n]*:=.*$",
+    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([A-Za-z0-9_']+)\b[^\n]*:=.*$",
     re.MULTILINE,
 )
 _ABBREV_WITH_COMMENT_RE = re.compile(
