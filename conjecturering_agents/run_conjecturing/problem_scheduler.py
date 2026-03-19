@@ -20,6 +20,10 @@ from conjecturering_agents.run_conjecturing.logger import (
     RunLogger,
 )
 
+from conjecturering_agents.agents.solver import (
+    SolverAgent,
+)
+
 # ============================================================
 # Scheduler state
 # ============================================================
@@ -108,7 +112,7 @@ class ProblemScheduler:
     def _truth_check_task(self, problem_idx: int, attempt_idx: int) -> Dict[str, Any]:
         ps = self.problems[problem_idx]
         attempt_record = self._find_finished_attempt_record_in_problem(ps, attempt_idx) or {}
-        pred = str(attempt_record.get("Answer") or "").strip()
+        pred = str(attempt_record.get("attempt_answer") or "").strip()
 
         if not pred:
             return {
@@ -259,35 +263,15 @@ class ProblemScheduler:
         except Exception as exc:
             exc_text = f"future_exception:{type(exc).__name__} msg={exc}"
             print(f"[warn] {exc_text}")
-            return {
-                "Problem ID": "",
-                "Attempt": attempt_idx,
-                "Response Length": 0,
-                "Python Calls": 0,
-                "Python Errors": 1,
-                "Entropy": float("inf"),
-                "Answer": None,
-                "Trace": {
-                    "prompt_token_ids_initial": [],
-                    "prompt_text_initial": "",
-                    "turns": [],
-                    "full_completion_token_ids": [],
-                    "full_conversation_token_ids": [],
-                    "raw_output": "",
-                    "last_assistant_channel": None,
-                    "last_assistant_recipient": None,
-                },
-                "Termination Reason": exc_text,
-                "Tool Calls": [],
-                "Attempt Started TS": "",
-                "Attempt Finished TS": datetime.now(timezone.utc).isoformat(),
-                "Attempt Elapsed MS": 0,
-            }
+            return SolverAgent.make_empty_attempt_record(
+                attempt_idx=attempt_idx,
+                termination_reason=exc_text
+            )
 
     @staticmethod
     def _find_finished_attempt_record_in_problem(ps: ProblemState, attempt_idx: int) -> Optional[Dict[str, Any]]:
         for attempt_record in ps.finished_attempts:
-            if int(attempt_record.get("Attempt", -1)) == int(attempt_idx):
+            if int(attempt_record.get("attempt", -1)) == int(attempt_idx):
                 return attempt_record
         return None
 
@@ -304,23 +288,7 @@ class ProblemScheduler:
         attempt_record = self._process_attempt_future_result(attempt_idx, done_fut)
         ps.finished_attempts.append(attempt_record)
 
-        self.logger.log_attempt(
-            {
-                "id": ps.id_value,
-                "attempt": attempt_record.get("Attempt", attempt_idx),
-                "attempt_answer": attempt_record.get("Answer", None),
-                "entropy": attempt_record.get("Entropy", None),
-                "response_length": attempt_record.get("Response Length", None),
-                "python_calls": attempt_record.get("Python Calls", None),
-                "python_errors": attempt_record.get("Python Errors", None),
-                "termination_reason": attempt_record.get("Termination Reason", "unknown"),
-                "attempt_started_ts": attempt_record.get("Attempt Started TS"),
-                "attempt_finished_ts": attempt_record.get("Attempt Finished TS"),
-                "attempt_elapsed_ms": attempt_record.get("Attempt Elapsed MS"),
-                "trace": attempt_record.get("Trace", {}),
-                "tool_calls": attempt_record.get("Tool Calls", []),
-            }
-        )
+        self.logger.log_attempt(attempt_record)
 
         tfut = pool.submit(self._truth_check_task, problem_idx, attempt_idx)
         inflight[tfut] = SchedulerTaskInfo(kind="truth_check", problem_idx=problem_idx, attempt_idx=attempt_idx)
@@ -396,7 +364,7 @@ class ProblemScheduler:
     def _select_best_attempt(ps: ProblemState) -> Optional[Dict[str, Any]]:
         candidates = [
             r for r in ps.finished_attempts
-            if str(r.get("Answer") or "").strip() != ""
+            if str(r.get("attempt_answer") or "").strip() != ""
         ]
         if not candidates:
             return None
@@ -404,8 +372,8 @@ class ProblemScheduler:
         return min(
             candidates,
             key=lambda r: (
-                to_float_or_inf(r.get("Entropy")),
-                int(r.get("Attempt", 10**9)),
+                to_float_or_inf(r.get("entropy")),
+                int(r.get("attempt", 10**9)),
             ),
         )
 
@@ -421,7 +389,7 @@ class ProblemScheduler:
 
         attempts_total = len(ps.finished_attempts)
         attempts_with_answer = sum(
-            1 for r in ps.finished_attempts if str(r.get("Answer") or "").strip() != ""
+            1 for r in ps.finished_attempts if str(r.get("attempt_answer") or "").strip() != ""
         )
 
         selected_attempt_record = self._select_best_attempt(ps)
@@ -431,9 +399,9 @@ class ProblemScheduler:
             selected_entropy: Optional[float] = None
             selected_is_correct: Optional[bool] = None
         else:
-            selected_attempt_idx = int(selected_attempt_record.get("Attempt"))
-            selected_answer_text = str(selected_attempt_record.get("Answer") or "")
-            selected_entropy = to_float_or_inf(selected_attempt_record.get("Entropy"))
+            selected_attempt_idx = int(selected_attempt_record.get("attempt"))
+            selected_answer_text = str(selected_attempt_record.get("attempt_answer") or "")
+            selected_entropy = to_float_or_inf(selected_attempt_record.get("entropy"))
             selected_is_correct = ps.truth_results.get(selected_attempt_idx, {}).get("is_correct", None)
 
         checker_summary = {

@@ -17,6 +17,7 @@ from conjecturering_agents.tool_calling_backends.jupyter import (
     JupyterKernelConfig,
     JupyterToolBackend,
 )
+from datetime import datetime, timezone
 
 
 # ============================================================
@@ -345,14 +346,14 @@ class SolverAgent:
             termination_reason = f"{termination_reason} msg={result.exception}"
 
         return {
-            "Problem ID": problem_id,
-            "Attempt": attempt_index,
-            "Response Length": result.total_tokens,
-            "Python Calls": python_calls,
-            "Python Errors": python_errors,
-            "Entropy": result.mean_entropy,
-            "Answer": result.parsed_output,
-            "Trace": {
+            "problem_id": problem_id,
+            "attempt": attempt_index,
+            "response_length": result.total_tokens,
+            "python_calls": python_calls,
+            "python_errors": python_errors,
+            "entropy": result.mean_entropy,
+            "attempt_answer": result.parsed_output,
+            "trace": {
                 "prompt_token_ids_initial": result.prompt_token_ids_initial,
                 "prompt_text_initial": result.prompt_text_initial,
                 "turns": result.turns,
@@ -362,11 +363,38 @@ class SolverAgent:
                 "last_assistant_channel": result.last_assistant_channel,
                 "last_assistant_recipient": result.last_assistant_recipient,
             },
-            "Termination Reason": termination_reason,
-            "Tool Calls": result.tool_calls,
-            "Attempt Started TS": result.started_ts,
-            "Attempt Finished TS": result.finished_ts,
-            "Attempt Elapsed MS": result.elapsed_ms,
+            "termination_reason": termination_reason,
+            "tool_calls": result.tool_calls,
+            "attempt_started_ts": result.started_ts,
+            "attempt_finished_ts": result.finished_ts,
+            "attempt_elapsed_ms": result.elapsed_ms,
+        }
+
+    @staticmethod
+    def make_empty_attempt_record(*, attempt_idx: int, termination_reason: str) -> Dict[str, Any]:
+        return {
+            "problem_id": "",
+            "attempt": attempt_idx,
+            "response_length": 0,
+            "python_calls": 0,
+            "python_errors": 1,
+            "entropy": float("inf"),
+            "attempt_answer": None,
+            "trace": {
+                "prompt_token_ids_initial": [],
+                "prompt_text_initial": "",
+                "turns": [],
+                "full_completion_token_ids": [],
+                "full_conversation_token_ids": [],
+                "raw_output": "",
+                "last_assistant_channel": None,
+                "last_assistant_recipient": None,
+            },
+            "termination_reason": termination_reason,
+            "tool_calls": [],
+            "attempt_started_ts": "",
+            "attempt_finished_ts": datetime.now(timezone.utc).isoformat(),
+            "attempt_elapsed_ms": 0,
         }
 
     # --------------------------------------------------------

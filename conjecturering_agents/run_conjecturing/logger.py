@@ -86,7 +86,7 @@ class RunLogger:
     def log_attempt(self, attempt_record: Dict[str, Any]) -> None:
         ts = self._now_iso()
         summary = (
-            f"id={attempt_record.get('id')} attempt={attempt_record.get('attempt')} "
+            f"problem_id={attempt_record.get('problem_id')} attempt={attempt_record.get('attempt')} "
             f"ans={self._safe_one_line(attempt_record.get('attempt_answer'))} "
             f"ent={attempt_record.get('entropy')} "
             f"py={attempt_record.get('python_calls')}/{attempt_record.get('python_errors')} "
