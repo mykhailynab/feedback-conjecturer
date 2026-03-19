@@ -46,7 +46,7 @@ class RunConjectureFormalizationConfig:
     batch_size: int = 256
     context_tokens: int = 65536
     stream_interval: int = 200
-    server_timeout: int = 180
+    server_timeout: int = 600
     session_timeout: int = 960
     preload_workers: int = 8
     preload_model_weights: bool = True
@@ -75,7 +75,7 @@ class RunConjectureFormalizationConfig:
     formalizer_max_turns: int = 48
     formalizer_timeout_seconds: int = 300
     formalizer_buffer_tokens: int = 512
-    formalizer_stream_text_window: int = 32
+    formalizer_stream_text_window: int = 4096
 
     use_python_tool: bool = True
     use_lean_tool: bool = True
@@ -229,7 +229,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
     # Parallelism / slicing
     # -----------------------------
     p.add_argument("--agent-parallelism", type=int, default=RunConjectureFormalizationConfig.agent_parallelism)
-    p.add_argument("--max-attempts", type=int, default=RunConjectureFormalizationConfig.max_attempts)
+    p.add_argument("--max-attempts", type=int, default=RunConjectureFormalizationConfig.max_attempts, help="max attempts to consider from the attempts file")
     p.add_argument("--seed", type=int, default=RunConjectureFormalizationConfig.seed)
 
     p.add_argument(
@@ -266,6 +266,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
         "--formalizer-buffer-tokens",
         type=int,
         default=RunConjectureFormalizationConfig.formalizer_buffer_tokens,
+        help="Buffer from context tokens to current input prompt tokens to stop with context_exhausted"
     )
     p.add_argument(
         "--formalizer-stream-text-window",

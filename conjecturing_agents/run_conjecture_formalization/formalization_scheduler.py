@@ -41,7 +41,7 @@ def _attempt_field(record: Dict[str, Any], *names: str, default: Any = None) -> 
 
 def _extract_problem_id(record: Dict[str, Any]) -> str:
     return str(
-        _attempt_field(record, "problem_id", "Problem ID", default="")
+        _attempt_field(record, "problem_id", "Problem ID", "id", default="")
     )
 
 
