@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from tqdm import tqdm
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -520,48 +520,58 @@ class FormalizationScheduler:
     def run_all(self) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
 
-        with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
-            futures: Dict[Future, FormalizationTaskState] = {
-                pool.submit(self._run_formalization_task, state): state
-                for state in self.states
-            }
+        progress_bar = None
+        if (not self.cfg.log_formalization_progress) and self.states:
+            progress_bar = tqdm(total=len(self.states), desc="Formalizations", unit="task")
 
-            for fut in as_completed(futures):
-                state = futures[fut]
-                try:
-                    record = fut.result()
-                except Exception as exc:
-                    self.logger.log_warn(
-                        f"Formalization task crashed for id={state.problem_id!r} attempt={state.attempt_idx}: {exc}"
-                    )
-                    record = {
-                        "problem_id": state.problem_id,
-                        "attempt": state.attempt_idx,
-                        "status": "failed",
-                        "skip_reason": None,
-                        "attempt_answer": _extract_attempt_answer(state.attempt_record),
-                        "attempt_raw_output_tail": _extract_trace_raw_output(state.attempt_record)[-self.cfg.solution_tail_chars :],
-                        "ground_truth_extracted_answer": None,
-                        "required_abbrev_name": None,
-                        "lean_statement_without_comment": None,
-                        "extracted_row_name": None,
-                        "extracted_row_tags": [],
-                        "rounds_used": 0,
-                        "rounds": [],
-                        "final_abbrev_declaration": None,
-                        "final_compile_ok": False,
-                        "final_compile_relative_path": None,
-                        "final_compile_formatted_diagnostics": str(exc),
-                        "started_ts": "",
-                        "finished_ts": _now_iso(),
-                        "elapsed_ms": 0,
-                    }
+        try:
+            with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
+                futures: Dict[Future, FormalizationTaskState] = {
+                    pool.submit(self._run_formalization_task, state): state
+                    for state in self.states
+                }
 
-                results.append(record)
-                self.logger.log_formalization_result(record)
+                for fut in as_completed(futures):
+                    state = futures[fut]
+                    try:
+                        record = fut.result()
+                    except Exception as exc:
+                        self.logger.log_warn(
+                            f"Formalization task crashed for id={state.problem_id!r} attempt={state.attempt_idx}: {exc}"
+                        )
+                        record = {
+                            "problem_id": state.problem_id,
+                            "attempt": state.attempt_idx,
+                            "status": "failed",
+                            "skip_reason": None,
+                            "attempt_answer": _extract_attempt_answer(state.attempt_record),
+                            "attempt_raw_output_tail": _extract_trace_raw_output(state.attempt_record)[-self.cfg.solution_tail_chars :],
+                            "ground_truth_extracted_answer": None,
+                            "required_abbrev_name": None,
+                            "lean_statement_without_comment": None,
+                            "extracted_row_name": None,
+                            "extracted_row_tags": [],
+                            "rounds_used": 0,
+                            "rounds": [],
+                            "final_abbrev_declaration": None,
+                            "final_compile_ok": False,
+                            "final_compile_relative_path": None,
+                            "final_compile_formatted_diagnostics": str(exc),
+                            "started_ts": "",
+                            "finished_ts": _now_iso(),
+                            "elapsed_ms": 0,
+                        }
 
-                if self.cfg.log_formalization_progress and self.states:
-                    pct = 100.0 * len(results) / len(self.states)
-                    print(f"Completed: {pct:.2f}%")
+                    results.append(record)
+                    self.logger.log_formalization_result(record)
+
+                    if self.cfg.log_formalization_progress and self.states:
+                        pct = 100.0 * len(results) / len(self.states)
+                        print(f"Completed: {pct:.2f}%")
+                    elif progress_bar is not None:
+                        progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
         return results
