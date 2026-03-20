@@ -15,10 +15,6 @@ from conjecturing_agents.agents.informal_correctness_checker import (
     InformalCorrectnessCheckerConfig,
 )
 
-from conjecturing_agents.run_conjecturing.problem_scheduler import (
-    ProblemState
-)
-
 # ============================================================
 # Script config
 # ============================================================

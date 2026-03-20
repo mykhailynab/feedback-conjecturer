@@ -156,7 +156,10 @@ class JupyterKernelSession:
             self._owns_kernel = True
 
             if self.cfg.preload_code.strip():
-                self.execute(self.cfg.preload_code, timeout=self.cfg.timeout_seconds)
+                self._execute_after_start(
+                    self.cfg.preload_code,
+                    timeout=self.cfg.timeout_seconds,
+                )
 
     def close(self) -> None:
         with self._init_lock:
@@ -184,7 +187,10 @@ class JupyterKernelSession:
     def reset(self) -> None:
         self.start()
         if self.cfg.reset_code.strip():
-            self.execute(self.cfg.reset_code, timeout=self.cfg.timeout_seconds)
+            self._execute_after_start(
+                self.cfg.reset_code,
+                timeout=self.cfg.timeout_seconds,
+            )
 
     def __enter__(self) -> "JupyterKernelSession":
         self.start()
@@ -239,9 +245,12 @@ class JupyterKernelSession:
     # Execution
     # --------------------------------------------------------
 
-    def execute(self, code: str, timeout: Optional[float] = None) -> JupyterExecutionResult:
-        self.start()
-
+    def _execute_after_start(self, code: str, timeout: Optional[float] = None) -> JupyterExecutionResult:
+        """
+        Execute code assuming the kernel has already been started.
+        It is used both by public execute() and by start() during preload,
+        which avoids recursive acquisition of self._init_lock.
+        """
         assert self._client is not None
         assert self._km is not None
 
@@ -331,6 +340,10 @@ class JupyterKernelSession:
             elapsed_ms=int((time.time() - t0) * 1000),
             executed_code=final_code,
         )
+
+    def execute(self, code: str, timeout: Optional[float] = None) -> JupyterExecutionResult:
+        self.start()
+        return self._execute_after_start(code, timeout=timeout)
 
 
 # ============================================================

@@ -257,6 +257,12 @@ class FormalizationScheduler:
         if context is None:
             finished_ts = _now_iso()
             elapsed_ms = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
+            self.logger.log_event("formalization_done", {
+                "problem_id": state.problem_id,
+                "attempt": state.attempt_idx,
+                "status": "skipped",
+                "msg": f"Formalization skipped: id={state.problem_id} attempt={state.attempt_idx} status=skipped",
+            })
             return {
                 "problem_id": state.problem_id,
                 "attempt": state.attempt_idx,
@@ -274,6 +280,12 @@ class FormalizationScheduler:
         if context["status"] == "skipped":
             finished_ts = _now_iso()
             elapsed_ms = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
+            self.logger.log_event("formalization_done", {
+                "problem_id": state.problem_id,
+                "attempt": state.attempt_idx,
+                "status": "skipped",
+                "msg": f"Formalization skipped: id={state.problem_id} attempt={state.attempt_idx} status=skipped",
+            })
             return {
                 "problem_id": state.problem_id,
                 "attempt": state.attempt_idx,
