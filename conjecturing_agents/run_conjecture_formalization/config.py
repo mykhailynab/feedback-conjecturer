@@ -321,6 +321,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
     # Logging
     # -----------------------------
     p.add_argument("--verbose", action="store_true", default=RunConjectureFormalizationConfig.verbose)
+    p.add_argument("--no-verbose", dest="verbose", action="store_false", default=RunConjectureFormalizationConfig.verbose)
 
     args = p.parse_args()
 
