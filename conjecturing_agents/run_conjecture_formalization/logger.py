@@ -76,5 +76,5 @@ class RunLogger:
         with self._lock:
             self._append_jsonl(self.formalizations_path, [record])
 
-        if self.verbose:
+        if self.log_formalization_progress:
             print(f"[LOG:formalizations] {summary}")

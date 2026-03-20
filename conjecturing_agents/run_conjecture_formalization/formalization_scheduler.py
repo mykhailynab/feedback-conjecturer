@@ -560,7 +560,7 @@ class FormalizationScheduler:
                 results.append(record)
                 self.logger.log_formalization_result(record)
 
-                if self.cfg.verbose and self.states:
+                if self.cfg.log_formalization_progress and self.states:
                     pct = 100.0 * len(results) / len(self.states)
                     print(f"Completed: {pct:.2f}%")
 

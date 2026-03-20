@@ -97,6 +97,7 @@ class RunConjectureFormalizationConfig:
     # Logging
     # -----------------------------
     verbose: bool = True
+    log_formalization_progress: bool = True
 
 
 def validate_cfg(cfg: RunConjectureFormalizationConfig) -> None:
