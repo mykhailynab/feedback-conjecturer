@@ -98,7 +98,10 @@ def main() -> None:
         print(f"Loaded extracted_putnam rows: {len(extracted_putnam_rows)}")
 
     backend_cfg = make_backend_config(cfg)
-    backend = VLLMHarmonyBackend(backend_cfg)
+    backend = VLLMHarmonyBackend(
+        backend_cfg,
+        event_logger=logger.log_event
+    )
 
     scheduler = FormalizationScheduler(
         cfg=cfg,

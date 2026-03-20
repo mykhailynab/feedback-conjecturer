@@ -179,6 +179,12 @@ class FormalizationScheduler:
         attempt_record = state.attempt_record
         problem_id = state.problem_id
 
+        self.logger.log_event("formalization_resolve_start", {
+            "problem_id": state.problem_id,
+            "attempt": state.attempt_idx,
+            "msg": f"Resolving formalization context: id={state.problem_id} attempt={state.attempt_idx}",
+        })
+
         attempt_answer = _extract_attempt_answer(attempt_record)
         if self.cfg.skip_empty_answers and not attempt_answer:
             return {
@@ -215,6 +221,11 @@ class FormalizationScheduler:
 
         raw_output = _extract_trace_raw_output(attempt_record)
 
+        self.logger.log_event("formalization_resolve_done", {
+            "problem_id": problem_id,
+            "attempt": state.attempt_idx
+        })
+
         return {
             "status": "ready",
             "problem_text": problem_text,
@@ -236,14 +247,11 @@ class FormalizationScheduler:
         started_ts = _now_iso()
         t0 = datetime.now(timezone.utc)
 
-        self.logger.log_event(
-            "formalization_start",
-            {
-                "problem_id": state.problem_id,
-                "attempt": state.attempt_idx,
-                "msg": f"Formalization start: id={state.problem_id} attempt={state.attempt_idx}",
-            },
-        )
+        self.logger.log_event("formalization_start", {
+            "problem_id": state.problem_id,
+            "attempt": state.attempt_idx,
+            "msg": f"Formalization start: id={state.problem_id} attempt={state.attempt_idx}",
+        })
 
         context = self._resolve_attempt_context(state)
         if context is None:
@@ -297,11 +305,26 @@ class FormalizationScheduler:
         final_compile_relative_path: Optional[str] = None
         final_compile_formatted_diagnostics: str = ""
 
+        def _append_round_and_log(round_num: int, round_record: Dict[str, Any]):
+            rounds.append(round_record)
+            self.logger.log_event("formalization_round_done", {
+                "problem_id": state.problem_id,
+                "attempt": state.attempt_idx,
+                "round": round_num,
+                "compile_ok": round_record.get("compile_ok"),
+                "termination_reason": round_record.get("termination_reason"),
+            })
+
         try:
             error_feedback = ""
             previous_abbrev: Optional[str] = None
 
             for round_num in range(1, self.cfg.max_correction_rounds + 2):
+                self.logger.log_event("formalization_round_start", {
+                    "problem_id": state.problem_id,
+                    "attempt": state.attempt_idx,
+                    "round": round_num,
+                })
                 if round_num == 1:
                     formalizer_result = formalizer.formalize_conjecture(
                         backend=self.backend,
@@ -337,6 +360,15 @@ class FormalizationScheduler:
                         },
                     )
                     formalizer_result = formalizer._to_formalization_result(run_result)
+                
+                self.logger.log_event("formalization_agent_call_done", {
+                    "problem_id": state.problem_id,
+                    "attempt": state.attempt_idx,
+                    "round": round_num,
+                    "termination_reason": formalizer_result.get("termination_reason"),
+                    "python_calls": formalizer_result.get("python_calls", 0),
+                    "lean_calls": formalizer_result.get("lean_calls", 0),
+                })
 
                 parsed = formalizer_result.get("result", {}) or {}
                 abbrev_declaration = parsed.get("abbrev_declaration")
@@ -367,7 +399,7 @@ class FormalizationScheduler:
                     )
                     round_record["compile_ok"] = False
                     round_record["compile_formatted_diagnostics"] = error_feedback
-                    rounds.append(round_record)
+                    _append_round_and_log(round_num, round_record)
                     continue
 
                 try:
@@ -380,15 +412,31 @@ class FormalizationScheduler:
                     error_feedback = f"Failed to replace the scaffold abbrev with your generated declaration: {exc}"
                     round_record["compile_ok"] = False
                     round_record["compile_formatted_diagnostics"] = error_feedback
-                    rounds.append(round_record)
+                    _append_round_and_log(round_num, round_record)
                     continue
 
+                self.logger.log_event("formalization_external_compile_start", {
+                    "problem_id": state.problem_id,
+                    "attempt": state.attempt_idx,
+                    "round": round_num,
+                })
                 compile_result = self.validation_lean_backend.compile_code(assembled_lean)
+                self.logger.log_event("formalization_external_compile_done", {
+                    "problem_id": state.problem_id,
+                    "attempt": state.attempt_idx,
+                    "round": round_num,
+                    "ok": compile_result.ok,
+                    "timed_out": compile_result.timed_out,
+                    "returncode": compile_result.returncode,
+                    "json_error_count": len(compile_result.json_errors),
+                    "json_warning_count": len(compile_result.json_warnings),
+                    "sorry_warning_count": len(compile_result.sorry_warnings),
+                })
                 round_record["compile_ok"] = compile_result.ok
                 round_record["compile_relative_path"] = compile_result.relative_path
                 round_record["compile_formatted_diagnostics"] = compile_result.formatted_diagnostics
                 round_record["assembled_lean"] = assembled_lean
-                rounds.append(round_record)
+                _append_round_and_log(round_num, round_record)
 
                 if compile_result.ok:
                     final_status = "success"
@@ -409,7 +457,15 @@ class FormalizationScheduler:
                 final_abbrev_declaration = rounds[-1].get("abbrev_declaration")
 
         finally:
+            self.logger.log_event("formalization_close_start", {
+                "problem_id": state.problem_id,
+                "attempt": state.attempt_idx,
+            })
             formalizer.close()
+            self.logger.log_event("formalization_close_done", {
+                "problem_id": state.problem_id,
+                "attempt": state.attempt_idx,
+            })
 
         finished_ts = _now_iso()
         elapsed_ms = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
@@ -437,15 +493,12 @@ class FormalizationScheduler:
             "elapsed_ms": elapsed_ms,
         }
 
-        self.logger.log_event(
-            "formalization_done",
-            {
-                "problem_id": state.problem_id,
-                "attempt": state.attempt_idx,
-                "status": final_status,
-                "msg": f"Formalization done: id={state.problem_id} attempt={state.attempt_idx} status={final_status}",
-            },
-        )
+        self.logger.log_event("formalization_done", {
+            "problem_id": state.problem_id,
+            "attempt": state.attempt_idx,
+            "status": final_status,
+            "msg": f"Formalization done: id={state.problem_id} attempt={state.attempt_idx} status={final_status}",
+        })
         return result_record
 
     # --------------------------------------------------------

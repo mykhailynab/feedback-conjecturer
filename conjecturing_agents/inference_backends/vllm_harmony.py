@@ -69,9 +69,6 @@ class ToolDispatchResult:
     record: Dict[str, Any] = field(default_factory=dict)
 
 
-
-
-
 # ============================================================
 # Generic helper utilities
 # ============================================================
@@ -258,6 +255,7 @@ class VLLMHarmonyBackendConfig:
         return f"http://{self.client_host}:{self.port}/v1"
 
 
+EventLoggerFn = Callable[[str, Dict[str, Any]], None]
 ChunkTerminationFn = Callable[["HarmonySessionState", str, str], Optional[TerminationSignal]]
 MessageTerminationFn = Callable[["HarmonySessionState", Message, str], Optional[TerminationSignal]]
 SessionTerminationFn = Callable[["HarmonySessionState"], Optional[TerminationSignal]]
@@ -385,8 +383,14 @@ class VLLMHarmonyBackend:
       - termination conditions are injected by the agent
     """
 
-    def __init__(self, cfg: VLLMHarmonyBackendConfig):
+    def __init__(
+            self,
+            cfg: VLLMHarmonyBackendConfig,
+            *,
+            event_logger: Optional[EventLoggerFn] = None,
+        ):
         self.cfg = cfg
+        self.event_logger = event_logger
         self.encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
 
@@ -400,6 +404,43 @@ class VLLMHarmonyBackend:
 
         self._lifecycle_lock = threading.Lock()
         self._started = False
+
+    def _log_event(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        if self.event_logger is None:
+            return
+        try:
+            self.event_logger(event_type, payload)
+        except Exception:
+            pass
+
+    def _session_log_payload(
+        self,
+        *,
+        agent: HarmonyAgentSpec,
+        state: Optional[HarmonySessionState] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "agent_name": agent.name,
+        }
+
+        if state is not None:
+            payload.update({
+                "problem_id": state.metadata.get("problem_id"),
+                "attempt": state.metadata.get("attempt"),
+                "attempt_index": state.metadata.get("attempt_index"),
+                "round": state.metadata.get("round"),
+                "task_kind": state.metadata.get("task_kind"),
+            })
+
+        if extra:
+            payload.update(extra)
+
+        return payload
 
     # --------------------------------------------------------
     # Lifecycle
@@ -748,7 +789,21 @@ class VLLMHarmonyBackend:
             started_ts=started_ts,
         )
 
+        self._log_event("backend_session_start",
+            self._session_log_payload(agent=agent, state=state, extra={
+                "max_turns": agent.max_turns,
+                "timeout_seconds": agent.timeout_seconds,
+            })
+        )
+
         exception_text: Optional[str] = None
+
+        def _log_event_and_extra(event_type: str, extra: Dict[str, Any]):
+            self._log_event(event_type, self._session_log_payload(agent=agent, state=state, extra=extra))
+
+        def _log_turn_stop(extra: Dict[str, Any]):
+            extra.update({"turn": turn_idx})
+            _log_event_and_extra("backend_turn_stop", extra)
 
         try:
             prompt_token_ids_initial = list(
@@ -762,8 +817,10 @@ class VLLMHarmonyBackend:
             termination_signal: Optional[TerminationSignal] = None
 
             for turn_idx in range(agent.max_turns):
+                _log_event_and_extra("backend_turn_start", extra={"turn": turn_idx})
                 if time.time() > deadline:
                     state.termination_reason = "deadline_exceeded"
+                    _log_turn_stop({"reason": state.termination_reason})
                     break
 
                 prompt_ids = self.encoding.render_conversation_for_completion(conversation, Role.ASSISTANT)
@@ -771,6 +828,10 @@ class VLLMHarmonyBackend:
 
                 if max_tokens < agent.buffer_tokens:
                     state.termination_reason = "context_exhausted"
+                    _log_turn_stop({
+                        "reason": state.termination_reason,
+                        "remaining_tokens": max_tokens,
+                    })
                     break
 
                 token_buffer: List[int] = []
@@ -779,6 +840,12 @@ class VLLMHarmonyBackend:
                 stream = None
 
                 try:
+                    _log_event_and_extra("backend_llm_request_start", extra={
+                        "turn": turn_idx,
+                        "prompt_tokens": len(prompt_ids),
+                        "max_tokens": max_tokens,
+                        "seed": int((seed + agent.seed_offset) ** 2),
+                    })
                     stream = self.client.completions.create(
                         model=self.cfg.served_model_name,
                         temperature=agent.temperature,
@@ -793,11 +860,23 @@ class VLLMHarmonyBackend:
                             "return_token_ids": True,
                         },
                     )
+                    _log_event_and_extra("backend_llm_request_created", extra={"turn": turn_idx})
+
+                    first_chunk_seen = False
 
                     for chunk in stream:
+                        if not first_chunk_seen:
+                            first_chunk_seen = True
+                            _log_event_and_extra("backend_llm_first_chunk", extra={"turn": turn_idx})
+
                         if time.time() > deadline:
                             state.termination_reason = "deadline_exceeded"
                             stream_interrupted = True
+                            _log_event_and_extra("backend_llm_stream_stop", extra={
+                                "turn": turn_idx,
+                                "reason": "deadline_exceeded_during_stream",
+                                "tokens_so_far": len(token_buffer),
+                            })
                             break
 
                         choice = chunk.choices[0]
@@ -823,6 +902,11 @@ class VLLMHarmonyBackend:
                                 termination_signal = maybe_signal
                                 state.parsed_output = maybe_signal.parsed_output
                                 state.termination_reason = maybe_signal.reason
+                                _log_event_and_extra("backend_llm_stream_stop", extra={
+                                    "turn": turn_idx,
+                                    "reason": state.termination_reason,
+                                    "tokens_so_far": len(token_buffer),
+                                })
                                 break
 
                 finally:
@@ -831,6 +915,12 @@ class VLLMHarmonyBackend:
                             stream.close()
                     except Exception:
                         pass
+
+                _log_event_and_extra("backend_llm_stream_done", extra={
+                    "turn": turn_idx,
+                    "first_chunk_seen": first_chunk_seen,
+                    "completion_tokens": len(token_buffer),
+                })
 
                 completion_text = self._decode_ids(token_buffer) if token_buffer else ""
                 state.turns.append(
@@ -842,14 +932,17 @@ class VLLMHarmonyBackend:
                 )
 
                 if termination_signal is not None:
+                    _log_turn_stop({"reason": state.termination_reason})
                     break
 
                 if stream_interrupted:
+                    _log_turn_stop({"reason": state.termination_reason})
                     break
 
                 if not token_buffer:
                     if state.termination_reason == "unknown":
                         state.termination_reason = "no_tokens"
+                    _log_turn_stop({"reason": state.termination_reason})
                     break
 
                 new_messages = self.encoding.parse_messages_from_completion_tokens(
@@ -859,7 +952,18 @@ class VLLMHarmonyBackend:
                 last_message = new_messages[-1]
                 state.last_assistant_message = last_message
 
+                _log_event_and_extra("backend_turn_parsed", extra={
+                    "turn": turn_idx,
+                    "message_channel": last_message.channel,
+                    "message_recipient": last_message.recipient,
+                    "message_text_len": len(self._message_text(last_message)),
+                })
+
                 if last_message.recipient:
+                    _log_event_and_extra("backend_tool_dispatch_start", extra={
+                        "turn": turn_idx,
+                        "recipient": last_message.recipient,
+                    })
                     dispatch = self._dispatch_tool_message(
                         agent=agent,
                         state=state,
@@ -867,6 +971,11 @@ class VLLMHarmonyBackend:
                     )
                     state.tool_calls.append(dispatch.record)
                     conversation.messages.extend(dispatch.messages)
+                    _log_event_and_extra("backend_tool_dispatch_done", extra={
+                        "turn": turn_idx,
+                        "recipient": last_message.recipient,
+                        "tool_response_count": len(dispatch.messages),
+                    })
                     continue
 
                 if agent.terminate_on_message is not None:
@@ -875,10 +984,15 @@ class VLLMHarmonyBackend:
                         termination_signal = maybe_signal
                         state.parsed_output = maybe_signal.parsed_output
                         state.termination_reason = maybe_signal.reason
+                        _log_event_and_extra("backend_termination_signal_message", extra={
+                            "turn": turn_idx,
+                            "reason": state.termination_reason,
+                        })
                         break
 
                 if agent.stop_on_final_channel and last_message.channel == "final":
                     state.termination_reason = "assistant_final"
+                    _log_turn_stop({"reason": state.termination_reason})
                     break
 
             if state.termination_reason == "unknown":
@@ -889,10 +1003,17 @@ class VLLMHarmonyBackend:
                 if maybe_signal is not None:
                     state.parsed_output = maybe_signal.parsed_output
                     state.termination_reason = maybe_signal.reason
+                    _log_event_and_extra("backend_termination_signal_session_end", extra={
+                        "reason": state.termination_reason,
+                    })
 
         except Exception as exc:
             exception_text = f"{type(exc).__name__}: {exc}"
             state.termination_reason = f"exception:{type(exc).__name__}"
+            _log_event_and_extra("backend_session_exception", extra={
+                "exception_type": type(exc).__name__,
+                "exception": str(exc),
+            })
 
         finished_ts = utcnow_iso()
         elapsed_ms = int((time.time() - t0) * 1000)
@@ -906,6 +1027,14 @@ class VLLMHarmonyBackend:
         if state.last_assistant_message is not None:
             last_channel = state.last_assistant_message.channel
             last_recipient = state.last_assistant_message.recipient
+
+        _log_event_and_extra("backend_session_done", extra={
+            "termination_reason": state.termination_reason,
+            "elapsed_ms": elapsed_ms,
+            "total_tokens": state.total_tokens,
+            "turn_count": len(state.turns),
+            "exception": exception_text,
+        })
 
         return HarmonyRunResult(
             agent_name=agent.name,

@@ -69,7 +69,10 @@ def main() -> None:
     )
 
     backend_cfg = make_backend_config(cfg)
-    backend = VLLMHarmonyBackend(backend_cfg)
+    backend = VLLMHarmonyBackend(
+        backend_cfg,
+        event_logger=logger.log_event
+    )
 
     problems: List[ProblemState] = [
         ProblemState(
