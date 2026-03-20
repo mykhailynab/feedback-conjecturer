@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import ast
 import time
 import queue
 import threading
@@ -220,26 +221,68 @@ class JupyterKernelSession:
 
     def ensure_last_print(self, code: str) -> str:
         """
-        If the last non-empty top-level line is an expression, wrap it in print(...).
-        This mirrors the behavior from your original implementation.
+        If the final top-level statement is a bare expression, wrap that expression
+        in print(...). Otherwise, leave the code unchanged.
+
+        Examples:
+        - "2 + 3"                   -> "print(2 + 3)"
+        - "x = 3"                   -> unchanged
+        - "while True:\\n    pass"  -> unchanged
+        - "import math"             -> unchanged
+        - "print(2 + 3)"            -> unchanged
         """
-        lines = code.strip().split("\n")
-        if not lines:
+        if not code or not code.strip():
             return code
 
-        last_line = lines[-1].strip()
-
-        if not last_line:
-            return code
-        if last_line.startswith("#"):
-            return code
-        if last_line.startswith(" "):
-            return code
-        if "print" in last_line or last_line.startswith("import "):
+        try:
+            tree = ast.parse(code, mode="exec")
+        except SyntaxError:
+            # If the snippet is syntactically invalid/incomplete, do nothing.
             return code
 
-        lines[-1] = f"print({last_line})"
-        return "\n".join(lines)
+        if not tree.body:
+            return code
+
+        last_stmt = tree.body[-1]
+
+        # Only wrap a final top-level bare expression.
+        if not isinstance(last_stmt, ast.Expr):
+            return code
+
+        expr = last_stmt.value
+
+        # Don't wrap an existing print(...) call.
+        if (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Name)
+            and expr.func.id == "print"
+        ):
+            return code
+
+        # Avoid wrapping a trailing module docstring / bare string literal.
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            return code
+
+        # We rely on end positions, available in modern Python versions.
+        if not all(
+            hasattr(last_stmt, attr)
+            for attr in ("lineno", "col_offset", "end_lineno", "end_col_offset")
+        ):
+            return code
+
+        lines = code.splitlines(keepends=True)
+
+        def to_offset(lineno: int, col: int) -> int:
+            # ast line numbers are 1-based
+            return sum(len(lines[i]) for i in range(lineno - 1)) + col
+
+        start = to_offset(last_stmt.lineno, last_stmt.col_offset)
+        end = to_offset(last_stmt.end_lineno, last_stmt.end_col_offset)
+
+        original_expr_text = code[start:end]
+        wrapped_expr_text = f"print({original_expr_text})"
+
+        return code[:start] + wrapped_expr_text + code[end:]
 
     # --------------------------------------------------------
     # Execution
