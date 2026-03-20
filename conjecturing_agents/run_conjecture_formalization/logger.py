@@ -20,10 +20,12 @@ class RunLogger:
         formalizations_path: str,
         log_dir: str,
         verbose: bool = True,
+        log_formalization_progress = True,
     ):
         self.formalizations_path = formalizations_path
         self.events_path = str(Path(log_dir) / "events.jsonl")
         self.verbose = verbose
+        self.log_formalization_progress = log_formalization_progress
         self._lock = threading.Lock()
 
     def _now_iso(self) -> str:

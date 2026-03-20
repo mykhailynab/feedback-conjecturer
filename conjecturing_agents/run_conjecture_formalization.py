@@ -85,6 +85,7 @@ def main() -> None:
         formalizations_path=formalizations_path,
         log_dir=str(log_dir),
         verbose=cfg.verbose,
+        log_formalization_progress=cfg.log_formalization_progress,
     )
 
     attempts = load_jsonl(cfg.attempts_path)

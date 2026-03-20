@@ -323,6 +323,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
     # -----------------------------
     p.add_argument("--verbose", action="store_true", default=RunConjectureFormalizationConfig.verbose)
     p.add_argument("--no-verbose", dest="verbose", action="store_false", default=RunConjectureFormalizationConfig.verbose)
+    p.add_argument("--no-log-formalization-progress", dest="log_formalization_progress", action="store_false", default=RunConjectureFormalizationConfig.log_formalization_progress)
 
     args = p.parse_args()
 
@@ -370,6 +371,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
         lean_jobs=args.lean_jobs,
         lean_workspace_subdir=args.lean_workspace_subdir,
         verbose=args.verbose,
+        log_formalization_progress=args.log_formalization_progress,
     )
     validate_cfg(cfg)
     return cfg
