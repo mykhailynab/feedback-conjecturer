@@ -163,7 +163,7 @@ class ProblemScheduler:
 
         progress_bar = None
         if (not self.cfg.log_attempt_progress) and self.problems:
-            progress_bar = tqdm(total=len(self.problems), desc="Problems", unit="task")
+            progress_bar = tqdm(total=len(self.problems), desc="Problems", unit="problem")
         completed_last = 0
 
         try:
