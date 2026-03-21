@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
-import json
 import re
+import json
+import argparse
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable
+
+from tqdm import tqdm
 
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     Lean4CompilerBackend,
@@ -74,6 +76,9 @@ _LEAN_BLOCK_PATTERNS = [
     re.compile(r"```lean\s*\n(.*?)\n```", re.DOTALL),
     re.compile(r"```lean\s*\n(.*?)```", re.DOTALL),
 ]
+
+
+CompileCacheValue = Tuple[bool, Optional[str], Optional[str], Optional[str]]
 
 
 def extract_abbrev_name_from_statement(lean_statement: str) -> Optional[str]:
@@ -201,10 +206,14 @@ def compile_candidate_abbrev(
     lean_statement_without_comment: str,
     required_abbrev_name: str,
     abbrev_declaration: str,
+    compile_cache: Dict[str, CompileCacheValue],
+    cache_stats: Dict[str, int],
 ) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
     """
     Returns:
       (ok, assembled_lean, relative_path, formatted_diagnostics)
+
+    Uses compile_cache so identical assembled Lean files are not recompiled.
     """
     try:
         assembled_lean = replace_abbrev_in_statement(
@@ -215,13 +224,32 @@ def compile_candidate_abbrev(
     except Exception as exc:
         return False, None, None, f"Failed to replace scaffold abbrev: {exc}"
 
+    cached = compile_cache.get(assembled_lean)
+    if cached is not None:
+        cache_stats["hits"] += 1
+        return cached
+    cache_stats["misses"] += 1
+
     compile_result = lean_backend.compile_code(assembled_lean)
     if not compile_result.ok:
         diag = compile_result.formatted_diagnostics or compile_result.stderr or compile_result.stdout
-        return False, assembled_lean, compile_result.relative_path, diag
+        result: CompileCacheValue = (
+            False,
+            assembled_lean,
+            compile_result.relative_path,
+            diag,
+        )
+        compile_cache[assembled_lean] = result
+        return result
 
-    return True, assembled_lean, compile_result.relative_path, compile_result.formatted_diagnostics
-
+    result = (
+        True,
+        assembled_lean,
+        compile_result.relative_path,
+        compile_result.formatted_diagnostics,
+    )
+    compile_cache[assembled_lean] = result
+    return result
 
 def try_repair_round(
     round_record: Dict[str, Any],
@@ -229,6 +257,8 @@ def try_repair_round(
     lean_statement_without_comment: str,
     required_abbrev_name: str,
     lean_backend: Lean4CompilerBackend,
+    compile_cache: Dict[str, CompileCacheValue],
+    cache_stats: Dict[str, int],
 ) -> Optional[Dict[str, Any]]:
     raw_output = str(round_record.get("raw_output") or "")
     if not raw_output:
@@ -252,6 +282,8 @@ def try_repair_round(
             lean_statement_without_comment=lean_statement_without_comment,
             required_abbrev_name=required_abbrev_name,
             abbrev_declaration=abbrev_declaration,
+            compile_cache=compile_cache,
+            cache_stats=cache_stats,
         )
         if not ok:
             continue
@@ -287,6 +319,9 @@ def repair_record(
     record: Dict[str, Any],
     *,
     lean_backend: Lean4CompilerBackend,
+    compile_cache: Dict[str, CompileCacheValue],
+    cache_stats: Dict[str, int],
+    print_fixes: bool,
 ) -> Tuple[Dict[str, Any], bool]:
     """
     Returns:
@@ -313,14 +348,18 @@ def repair_record(
             lean_statement_without_comment=str(lean_statement_without_comment),
             required_abbrev_name=str(required_abbrev_name),
             lean_backend=lean_backend,
+            compile_cache=compile_cache,
+            cache_stats=cache_stats,
         )
         if repaired_round is not None:
             rounds[i] = repaired_round
             changed = True
-            print(
-                f"[fix] Recovered abbrev for id={new_record.get('problem_id')} "
-                f"attempt={new_record.get('attempt')} round={i + 1}"
-            )
+
+            if print_fixes:
+                print(
+                    f"[fix] Recovered abbrev for id={new_record.get('problem_id')} "
+                    f"attempt={new_record.get('attempt')} round={i + 1}"
+                )
 
     if not changed:
         return new_record, False
@@ -395,6 +434,10 @@ def parse_args() -> argparse.Namespace:
         default=".conjecturing_agents/lean_tool_runs_posthoc_fix",
         help="Workspace subdir inside the Lean project for temporary files",
     )
+    p.add_argument(
+        "--print-fixes",
+        action="store_true",
+    )
     return p.parse_args()
 
 
@@ -425,12 +468,24 @@ def main() -> None:
     )
     lean_backend = Lean4CompilerBackend(lean_cfg)
 
+    compile_cache: Dict[str, CompileCacheValue] = {}
+    cache_stats = {
+        "hits": 0,
+        "misses": 0,
+    }
     changed_count = 0
     success_fixed_count = 0
     fixed_records: List[Dict[str, Any]] = []
 
-    for rec in records:
-        new_rec, changed = repair_record(rec, lean_backend=lean_backend)
+    progress = tqdm(records, desc="Post-hoc fixing", unit="record")
+    for rec in progress:
+        new_rec, changed = repair_record(
+            rec,
+            lean_backend=lean_backend,
+            compile_cache=compile_cache,
+            cache_stats=cache_stats,
+            print_fixes=args.print_fixes,
+        )
         fixed_records.append(new_rec)
 
         if changed:
@@ -438,12 +493,23 @@ def main() -> None:
             if new_rec.get("status") == "success" and not rec.get("final_compile_ok"):
                 success_fixed_count += 1
 
+        progress.set_postfix(
+            recovered=success_fixed_count,
+            changed=changed_count,
+            cache_hits=cache_stats["hits"],
+            cache_misses=cache_stats["misses"],
+            cache_size=len(compile_cache),
+        )
+
     write_jsonl(output_path, fixed_records)
 
     print()
     print(f"Wrote repaired records to: {output_path}")
     print(f"Rows modified: {changed_count}")
     print(f"Rows converted to success: {success_fixed_count}")
+    print(f"Compile cache hits: {cache_stats['hits']}")
+    print(f"Compile cache misses: {cache_stats['misses']}")
+    print(f"Unique compiled strings: {len(compile_cache)}")
 
 
 if __name__ == "__main__":
