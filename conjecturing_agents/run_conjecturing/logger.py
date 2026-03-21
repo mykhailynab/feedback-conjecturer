@@ -103,7 +103,7 @@ class RunLogger:
         with self._lock:
             self._append_jsonl(self.attempts_path, [record])
 
-        if self.verbose:
+        if self.log_attempt_progress:
             print(f"[LOG:attempts] Attempt summary: {summary}")
 
     def log_agent_call(self, *, kind: str, payload: Dict[str, Any]) -> None:
