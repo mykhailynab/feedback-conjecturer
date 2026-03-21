@@ -158,19 +158,20 @@ def extract_last_abbrev_declaration(
     if code_block:
         candidate_texts.append(code_block)
 
-    if code_block != text.strip():
+    stripped_text = text.strip()
+    if code_block != stripped_text:
         candidate_texts.append(text)
 
     for candidate_text in candidate_texts:
         lines = candidate_text.splitlines()
         abbrev_indices = [
             i for i, line in enumerate(lines)
-            if re.match(r"^\s*abbrev\b", line)
+            if _ABBREV_NAME_RE.match(line)
         ]
 
         for idx in reversed(abbrev_indices):
             head = lines[idx]
-            m_name = re.match(r"^\s*abbrev\s+([A-Za-z0-9_']+)\b", head)
+            m_name = _ABBREV_NAME_RE.match(head)
             if not m_name:
                 continue
 
