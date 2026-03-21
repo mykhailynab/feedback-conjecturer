@@ -164,6 +164,7 @@ class ProblemScheduler:
         progress_bar = None
         if (not self.cfg.log_attempt_progress) and self.problems:
             progress_bar = tqdm(total=len(self.problems), desc="Problems", unit="task")
+        completed_last = 0
 
         try:
             with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
@@ -177,7 +178,10 @@ class ProblemScheduler:
                         pct = 100.0 * completed / len(self.problems)
                         print(f"Completed: {pct:.2f}%")
                     elif progress_bar is not None:
-                        progress_bar.update(1)
+                        completed = sum(1 for p in self.problems if p.finalized)
+                        if completed > completed_last:
+                            progress_bar.update(completed - completed_last)
+                            completed_last = completed
 
                     done_fut = next(as_completed(list(inflight.keys())))
                     info = inflight.pop(done_fut)
