@@ -89,7 +89,8 @@ _ABBREV_WITH_COMMENT_RE = re.compile(
     re.MULTILINE,
 )
 _TOP_LEVEL_DECL_RE = re.compile(
-    r"^\s*(?:abbrev|theorem|lemma|def|example|structure|class|inductive|instance|"
+    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*"
+    r"(?:abbrev|theorem|lemma|def|example|structure|class|inductive|instance|"
     r"namespace|end|section|open|import|#check|#eval|#print)\b"
 )
 

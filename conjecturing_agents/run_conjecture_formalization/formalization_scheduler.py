@@ -398,6 +398,7 @@ class FormalizationScheduler:
                     "lean_errors": formalizer_result.get("lean_errors", 0),
                     "tool_calls": formalizer_result.get("tool_calls", []),
                     "raw_output": formalizer_result.get("raw_output", ""),
+                    "turns": formalizer_result.get("turns", []),
                     "compile_ok": None,
                     "compile_relative_path": None,
                     "compile_formatted_diagnostics": "",

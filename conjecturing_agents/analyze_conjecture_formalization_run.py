@@ -270,7 +270,9 @@ def analyze_formalizations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 if rr.get("compile_ok") is True:
                     rounds_compile_success += 1
 
-            round_failure_mode_counter[classify_round_failure(rr)] += 1
+            r_failure = classify_round_failure(rr)
+            if r_failure != "success":
+                round_failure_mode_counter[r_failure] += 1
 
         if rec.get("final_compile_ok") is True:
             success_compile_total += 1
@@ -414,7 +416,7 @@ def print_formalization_report(stats: Dict[str, Any]) -> None:
     print()
     print_counter("Final failure modes", stats["final_failure_mode_counter"], total=status_counter.get("failed", 0), limit=20)
     print()
-    print_counter("Round-level failure modes", stats["round_failure_mode_counter"], total=stats["rounds_total"], limit=25)
+    print_counter("Round-level failure modes", stats["round_failure_mode_counter"], total=stats["rounds_total"] - stats["rounds_compile_success"], limit=25)
     print()
     print_counter("Final round termination reasons", stats["final_termination_counter"], total=status_counter.get("failed", 0) + status_counter.get("success", 0), limit=20)
     print()
@@ -432,8 +434,8 @@ def print_formalization_report(stats: Dict[str, Any]) -> None:
     print(f"  compile-success rounds:        {rounds_compile_success}  {pct(rounds_compile_success, rounds_with_compile)}")
     print(f"  python calls total:            {stats['python_call_total']}")
     print(f"  python errors total:           {stats['python_error_total']}")
-    print(f"  lean calls total (agent tool): {stats['lean_call_total']}")
-    print(f"  lean errors total (agent tool):{stats['lean_error_total']}")
+    print(f"  lean calls total:              {stats['lean_call_total']}")
+    print(f"  lean errors total:             {stats['lean_error_total']}")
     print()
 
     print_elapsed_stats("Elapsed time: all records", stats["elapsed_ms_all"])
