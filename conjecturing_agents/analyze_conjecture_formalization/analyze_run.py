@@ -394,10 +394,10 @@ def print_formalization_report(stats: Dict[str, Any]) -> None:
     print("Top-level outcomes")
     for status in ["success", "failed", "skipped"]:
         count = status_counter.get(status, 0)
-        print(f"  {status:>8}: {count:>6}  {pct(count, total)}")
+        print(f"  {status:>18}: {count:>6}  {pct(count, total)}")
     for status, count in status_counter.items():
         if status not in {"success", "failed", "skipped"}:
-            print(f"  {status:>8}: {count:>6}  {pct(count, total)}")
+            print(f"  {status:>18}: {count:>6}  {pct(count, total)}")
     print()
 
     success_compile_total = stats["success_compile_total"]
@@ -405,11 +405,13 @@ def print_formalization_report(stats: Dict[str, Any]) -> None:
     success_compile_but_not_exact = stats["success_compile_but_not_exact"]
 
     print("Compile-success quality")
-    print(f"  compile-success total:           {success_compile_total:>6}  {pct(success_compile_total, total)}")
-    print(f"  exact RHS match to ground truth: {success_compile_and_exact:>6}  {pct(success_compile_and_exact, total)}")
-    print(f"  compile-success but RHS differs: {success_compile_but_not_exact:>6}  {pct(success_compile_but_not_exact, total)}")
+    print(f"  compile-success total:             {success_compile_total:>6}  {pct(success_compile_total, total)}")
+    print(f"  exact RHS match to ground truth:   {success_compile_and_exact:>6}  {pct(success_compile_and_exact, total)}")
+    print(f"  compile-success but RHS differs:   {success_compile_but_not_exact:>6}  {pct(success_compile_but_not_exact, total)}")
+    print()
+    print(f"  compile-success among non-skipped: {status_counter['success']:>6} / {status_counter['success'] + status_counter['failed']:>6}  {pct(status_counter['success'], status_counter['success'] + status_counter['failed'])}")
     if success_compile_total:
-        print(f"  exact among compile-success:   {pct(success_compile_and_exact, success_compile_total)}")
+        print(f"  exact among compile-success:       {success_compile_and_exact:>6} / {success_compile_total:>6}  {pct(success_compile_and_exact, success_compile_total)}")
     print()
 
     print_counter("Skip reasons", stats["skip_reason_counter"], total=status_counter.get("skipped", 0), limit=20)

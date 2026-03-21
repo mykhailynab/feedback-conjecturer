@@ -28,11 +28,13 @@ class RunLogger:
         solutions_path: str,
         log_dir: str,
         verbose: bool = True,
+        log_attempt_progress: bool = True,
     ):
         self.attempts_path = attempts_path
         self.solutions_path = solutions_path
         self.events_path = str(Path(log_dir) / "events.jsonl")
         self.verbose = verbose
+        self.log_attempt_progress = log_attempt_progress
         self._lock = threading.Lock()
         self._init_solutions_csv()
 
@@ -109,7 +111,7 @@ class RunLogger:
         with self._lock:
             self._append_jsonl(self.events_path, [rec])
 
-        if self.verbose:
+        if self.log_attempt_progress:
             rid = payload.get("problem_id")
             att = payload.get("attempt")
             eq = payload.get("agent_call", {}).get("result", {}).get("equivalent", None)
@@ -150,5 +152,5 @@ class RunLogger:
             with open(self.solutions_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(row)
 
-        if self.verbose:
+        if self.log_attempt_progress:
             print(f"[LOG:attempts_finished] id={id_value}")

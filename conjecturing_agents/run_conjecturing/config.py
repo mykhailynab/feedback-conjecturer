@@ -76,6 +76,7 @@ class RunConfig:
 
     # Logging
     verbose: bool = True
+    log_attempt_progress: bool = True
 
 
 def validate_cfg(cfg: RunConfig) -> None:
@@ -261,6 +262,9 @@ def parse_args_and_validate() -> RunConfig:
 
     # Logging
     p.add_argument("--verbose", action="store_true", default=RunConfig.verbose)
+    p.add_argument("--no-verbose", dest="verbose", action="store_false", default=RunConfig.verbose)
+    p.add_argument("--no-log-attempt-progress", dest="log_attempt_progress", action="store_false", default=RunConfig.log_attempt_progress)
+
 
     args = p.parse_args()
 
@@ -307,6 +311,7 @@ def parse_args_and_validate() -> RunConfig:
         checker_buffer_tokens=args.checker_buffer_tokens,
         checker_stream_text_window=args.checker_stream_text_window,
         verbose=args.verbose,
+        log_attempt_progress=args.log_attempt_progress,
     )
 
     validate_cfg(config)

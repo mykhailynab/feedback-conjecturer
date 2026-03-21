@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tqdm import tqdm
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -160,44 +161,53 @@ class ProblemScheduler:
     def run_all(self) -> List[Dict[str, Any]]:
         submission_rows: List[Dict[str, Any]] = []
 
-        with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
-            inflight: Dict[Future, SchedulerTaskInfo] = {}
+        progress_bar = None
+        if (not self.cfg.log_attempt_progress) and self.problems:
+            progress_bar = tqdm(total=len(self.problems), desc="Problems", unit="task")
 
-            self._fill_with_attempts(pool=pool, inflight=inflight)
-
-            while inflight:
-                if self.cfg.verbose and self.problems:
-                    completed = sum(1 for p in self.problems if p.finalized)
-                    pct = 100.0 * completed / len(self.problems)
-                    print(f"Completed: {pct:.2f}%")
-
-                done_fut = next(as_completed(list(inflight.keys())))
-                info = inflight.pop(done_fut)
-                ps = self.problems[info.problem_idx]
-
-                if info.kind == "attempt":
-                    self._handle_attempt_done(
-                        done_fut=done_fut,
-                        pool=pool,
-                        inflight=inflight,
-                        ps=ps,
-                        problem_idx=info.problem_idx,
-                        attempt_idx=int(info.attempt_idx),
-                    )
-                elif info.kind == "truth_check":
-                    self._handle_truth_check_done(
-                        done_fut=done_fut,
-                        ps=ps,
-                        attempt_idx=int(info.attempt_idx),
-                    )
-                else:
-                    raise ValueError(f"Unknown task kind: {info.kind}")
-
-                for pstate in self.problems:
-                    if self._ready_to_finalize_problem(pstate):
-                        submission_rows.append(self._finalize_problem_and_log_solution(pstate))
+        try:
+            with ThreadPoolExecutor(max_workers=self.cfg.agent_parallelism) as pool:
+                inflight: Dict[Future, SchedulerTaskInfo] = {}
 
                 self._fill_with_attempts(pool=pool, inflight=inflight)
+
+                while inflight:
+                    if self.cfg.log_attempt_progress and self.problems:
+                        completed = sum(1 for p in self.problems if p.finalized)
+                        pct = 100.0 * completed / len(self.problems)
+                        print(f"Completed: {pct:.2f}%")
+                    elif progress_bar is not None:
+                        progress_bar.update(1)
+
+                    done_fut = next(as_completed(list(inflight.keys())))
+                    info = inflight.pop(done_fut)
+                    ps = self.problems[info.problem_idx]
+
+                    if info.kind == "attempt":
+                        self._handle_attempt_done(
+                            done_fut=done_fut,
+                            pool=pool,
+                            inflight=inflight,
+                            ps=ps,
+                            problem_idx=info.problem_idx,
+                            attempt_idx=int(info.attempt_idx),
+                        )
+                    elif info.kind == "truth_check":
+                        self._handle_truth_check_done(
+                            done_fut=done_fut,
+                            ps=ps,
+                            attempt_idx=int(info.attempt_idx),
+                        )
+                    else:
+                        raise ValueError(f"Unknown task kind: {info.kind}")
+
+                    for pstate in self.problems:
+                        if self._ready_to_finalize_problem(pstate):
+                            submission_rows.append(self._finalize_problem_and_log_solution(pstate))
+
+                    self._fill_with_attempts(pool=pool, inflight=inflight)
+        finally:
+            progress_bar.close()
 
         return submission_rows
 

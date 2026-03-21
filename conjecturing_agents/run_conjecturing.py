@@ -66,6 +66,7 @@ def main() -> None:
         solutions_path=solutions_path,
         log_dir=str(log_dir),
         verbose=cfg.verbose,
+        log_attempt_progress=cfg.log_attempt_progress,
     )
 
     backend_cfg = make_backend_config(cfg)
