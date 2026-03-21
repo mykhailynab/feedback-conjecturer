@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
+import re
 import json
 import math
-import re
+import argparse
 from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median
@@ -482,8 +482,6 @@ def print_event_report(stats: Dict[str, Any], total_formalizations: int) -> None
 # ============================================================
 
 def parse_args() -> argparse.Namespace:
-    import argparse
-
     p = argparse.ArgumentParser(
         description="Analyse conjecture formalization results from a run folder."
     )
