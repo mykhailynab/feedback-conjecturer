@@ -189,7 +189,7 @@ def build_example_catalog(
     limit_modes: int,
     success_examples: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
-    failure_groups: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+    failure_groups: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
     success_pool: List[Dict[str, Any]] = []
 
     failure_counts = Counter()

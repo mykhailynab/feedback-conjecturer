@@ -110,7 +110,7 @@ def load_attempts_jsonl(path: Path) -> pd.DataFrame:
                 continue
 
             rows.append({
-                "id": str(obj.get("id", "")),
+                "id": str(obj.get("problem_id", "")),
                 "attempt": safe_int(obj.get("attempt")),
                 "attempt_answer": obj.get("attempt_answer"),
                 "entropy": safe_float(obj.get("entropy")),
