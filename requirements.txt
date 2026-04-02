@@ -6,3 +6,4 @@ tqdm
 numpy
 sympy
 mpmath
+polars
