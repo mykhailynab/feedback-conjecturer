@@ -174,9 +174,6 @@ def main() -> None:
 
         progress.close()
 
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
     all_results = decided_results + all_new_results
     success_records = [r for r in all_results if r.get("status") == "success"]
     equiv_true = sum(1 for r in success_records if r.get("equivalent") is True)
