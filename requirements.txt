@@ -1,0 +1,8 @@
+openai
+openai_harmony
+polars
+jupyter_client
+tqdm
+numpy
+sympy
+mpmath
