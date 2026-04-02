@@ -24,6 +24,9 @@ class AnswerCheckerConfig:
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
 
+    # Memory limit for the lake/lean subprocess (bytes); 0 = no limit
+    lean_max_memory_bytes: int = 17179869184  # 16 GiB
+
     # Which heuristics to run
     use_string_match: bool = True
     use_lean_equiv: bool = True
@@ -57,6 +60,7 @@ class AnswerChecker:
                 workspace_subdir=self.cfg.lean_workspace_subdir,
                 timeout_seconds=self.cfg.lean_timeout_seconds,
                 lean_jobs=self.cfg.lean_jobs,
+                max_memory_bytes=self.cfg.lean_max_memory_bytes,
                 treat_sorry_warning_as_failure=True,
                 treat_any_warning_as_failure=False,
             )

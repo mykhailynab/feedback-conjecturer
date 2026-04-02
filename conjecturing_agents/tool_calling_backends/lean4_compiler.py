@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import resource
 import shutil
 import subprocess
 import threading
@@ -78,6 +79,9 @@ class LeanCompilerConfig:
     treat_any_warning_as_failure: bool = False
     auto_extract_code_block: bool = True
     cleanup_source_file: bool = False
+
+    # Memory limit for the lake/lean subprocess (bytes); 0 = no limit
+    max_memory_bytes: int = 17179869184  # 16 GiB
 
     # Optional prefix added to temp files
     filename_prefix: str = "lean_tool_"
@@ -451,6 +455,13 @@ class Lean4CompilerBackend:
 
         t0 = time.time()
 
+        preexec_fn = None
+        if self.cfg.max_memory_bytes > 0:
+            limit = self.cfg.max_memory_bytes
+            preexec_fn = lambda: resource.setrlimit(
+                resource.RLIMIT_AS, (limit, limit)
+            )
+
         try:
             proc = subprocess.run(
                 cmd,
@@ -459,6 +470,7 @@ class Lean4CompilerBackend:
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=timeout_s,
+                preexec_fn=preexec_fn,
             )
             timed_out = False
             stdout = proc.stdout or ""

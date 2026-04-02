@@ -22,6 +22,7 @@ class CheckFormalizationsConfig:
     lean_workspace_subdir: str = ".conjecturing_agents/answer_checking"
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
+    lean_max_memory_bytes: int = 17179869184  # 0 = no limit
 
     # Heuristics
     use_string_match: bool = True
@@ -70,6 +71,7 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         lean_workspace_subdir=cfg.lean_workspace_subdir,
         lean_timeout_seconds=cfg.lean_timeout_seconds,
         lean_jobs=cfg.lean_jobs,
+        lean_max_memory_bytes=cfg.lean_max_memory_bytes,
         use_string_match=cfg.use_string_match,
         use_lean_equiv=cfg.use_lean_equiv,
     )
@@ -125,6 +127,15 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         type=int,
         default=CheckFormalizationsConfig.lean_jobs,
         help="Number of parallel jobs passed to lake env lean -j.",
+    )
+    p.add_argument(
+        "--lean-max-memory-bytes",
+        type=int,
+        default=CheckFormalizationsConfig.lean_max_memory_bytes,
+        help=(
+            "Maximum virtual memory (bytes) for each lake/lean subprocess. "
+            "0 means no limit. Example: 17179869184 for 16 GiB."
+        ),
     )
 
     # Heuristics
@@ -193,6 +204,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         lean_workspace_subdir=args.lean_workspace_subdir,
         lean_timeout_seconds=args.lean_timeout_seconds,
         lean_jobs=args.lean_jobs,
+        lean_max_memory_bytes=args.lean_max_memory_bytes,
         use_string_match=args.use_string_match,
         use_lean_equiv=args.use_lean_equiv,
         parallelism=args.parallelism,

@@ -408,6 +408,15 @@ def parse_args() -> argparse.Namespace:
         help="Workspace subdir inside the Lean project for temporary files",
     )
     p.add_argument(
+        "--lean-max-memory-bytes",
+        type=int,
+        default=17179869184,
+        help=(
+            "Maximum virtual memory (bytes) for each lake/lean subprocess. "
+            "Example: 17179869184 for 16 GiB."
+        ),
+    )
+    p.add_argument(
         "--print-fixes",
         action="store_true",
     )
@@ -432,6 +441,7 @@ def main() -> None:
         workspace_subdir=args.lean_workspace_subdir,
         timeout_seconds=args.lean_timeout_seconds,
         lean_jobs=args.lean_jobs,
+        max_memory_bytes=args.lean_max_memory_bytes,
         recipient_name="lean",
         tool_name="lean",
         treat_sorry_warning_as_failure=False,  # theorem sorry remains expected in this pipeline

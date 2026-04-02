@@ -92,6 +92,7 @@ class RunConjectureFormalizationConfig:
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
     lean_workspace_subdir: str = ".conjecturing_agents/lean_tool_runs"
+    lean_max_memory_bytes: int = 17179869184  # 16 GiB
 
     # -----------------------------
     # Logging
@@ -317,6 +318,15 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
         "--lean-workspace-subdir",
         default=RunConjectureFormalizationConfig.lean_workspace_subdir,
     )
+    p.add_argument(
+        "--lean-max-memory-bytes",
+        type=int,
+        default=RunConjectureFormalizationConfig.lean_max_memory_bytes,
+        help=(
+            "Maximum virtual memory (bytes) for each lake/lean subprocess. "
+            "Example: 17179869184 for 16 GiB."
+        ),
+    )
 
     # -----------------------------
     # Logging
@@ -370,6 +380,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
         lean_timeout_seconds=args.lean_timeout_seconds,
         lean_jobs=args.lean_jobs,
         lean_workspace_subdir=args.lean_workspace_subdir,
+        lean_max_memory_bytes=args.lean_max_memory_bytes,
         verbose=args.verbose,
         log_formalization_progress=args.log_formalization_progress,
     )
@@ -406,6 +417,7 @@ def make_lean_compiler_config(cfg: RunConjectureFormalizationConfig) -> LeanComp
         workspace_subdir=cfg.lean_workspace_subdir,
         timeout_seconds=cfg.lean_timeout_seconds,
         lean_jobs=cfg.lean_jobs,
+        max_memory_bytes=cfg.lean_max_memory_bytes,
         recipient_name="lean",
         tool_name="lean",
         treat_sorry_warning_as_failure=False,
