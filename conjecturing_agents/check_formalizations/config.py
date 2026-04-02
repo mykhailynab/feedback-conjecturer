@@ -30,6 +30,7 @@ class CheckFormalizationsConfig:
     # Orchestration
     parallelism: int = 4
     max_records: int = 0  # 0 = all
+    resume: bool = False  # --continue: re-check only undecided records from existing output
 
     # Logging
     verbose: bool = True
@@ -156,6 +157,19 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         help="Maximum number of records to check (0 = all).",
     )
 
+    # Continue / resume
+    p.add_argument(
+        "--continue",
+        dest="resume",
+        action="store_true",
+        default=CheckFormalizationsConfig.resume,
+        help=(
+            "Resume from an existing output file. Already-decided records "
+            "(equivalent is not None) are kept as-is; undecided records "
+            "(equivalent=None) are re-checked."
+        ),
+    )
+
     # Logging
     p.add_argument(
         "--verbose",
@@ -183,6 +197,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         use_lean_equiv=args.use_lean_equiv,
         parallelism=args.parallelism,
         max_records=args.max_records,
+        resume=args.resume,
         verbose=args.verbose,
     )
     validate_cfg(cfg)

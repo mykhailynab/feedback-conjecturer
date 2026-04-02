@@ -8,7 +8,11 @@ and applies two heuristics per record:
   1. String match (whitespace-normalized)
   2. Lean equivalence proof via canned tactics
 
-Writes results to <log_dir>/check_results.jsonl and prints a summary.
+Results are written to the output file continuously as they complete.
+
+Pass --continue to resume from an existing output file: already-decided
+records (equivalent is not None) are kept and written back immediately;
+only the undecided records (equivalent=None) are re-checked.
 
 Usage:
   python -m conjecturing_agents.check_formalizations \
@@ -18,19 +22,21 @@ Usage:
 """
 from __future__ import annotations
 
+import json
+import threading
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
 from conjecturing_agents.answer_checking.checker import AnswerChecker
-from conjecturing_agents.tools import load_jsonl, write_jsonl
+from conjecturing_agents.tools import load_jsonl
 from conjecturing_agents.check_formalizations.config import (
     make_checker_config,
     parse_args_and_validate,
 )
-
 
 
 def check_record(checker: AnswerChecker, record: Dict[str, Any]) -> Dict[str, Any]:
@@ -42,6 +48,10 @@ def check_record(checker: AnswerChecker, record: Dict[str, Any]) -> Dict[str, An
         "required_abbrev_name": record.get("required_abbrev_name"),
         **check,
     }
+
+
+def _record_key(r: Dict[str, Any]) -> Tuple[Any, Any]:
+    return (r.get("problem_id"), r.get("attempt"))
 
 
 def main() -> None:
@@ -57,81 +67,127 @@ def main() -> None:
 
     checker_cfg = make_checker_config(cfg)
 
-    # One checker per thread to avoid sharing the compiler's file counter.
-    def make_checker() -> AnswerChecker:
-        return AnswerChecker(checker_cfg)
+    decided_results: List[Dict[str, Any]] = []
+    records_to_check = records
 
-    results: List[Dict[str, Any]] = [{}] * len(records)
-    total = len(records)
+    if cfg.resume:
+        existing_path = Path(output_path)
+        if existing_path.exists():
+            existing = load_jsonl(existing_path)
+            decided_results = [r for r in existing if r.get("equivalent") is not None]
+            undecided_keys = {_record_key(r) for r in existing if r.get("equivalent") is None}
+            existing_keys = {_record_key(r) for r in existing}
+            records_to_check = [
+                r for r in records
+                if _record_key(r) in undecided_keys or _record_key(r) not in existing_keys
+            ]
+            if cfg.verbose:
+                print(
+                    f"Loaded {len(existing)} existing results from {output_path}: "
+                    f"{len(decided_results)} decided, {len(records_to_check)} to re-check"
+                )
+
+    total = len(records_to_check)
 
     if cfg.verbose:
         print(f"Checking {total} records from {cfg.formalizations_path}")
         print(f"Output: {output_path}")
 
-    progress = tqdm(total=total, desc="Checking", unit="rec")
-    equiv_counts: Dict[Any, int] = {True: 0, False: 0, None: 0}
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    write_lock = threading.Lock()
 
-    def _update_counts(result: Dict[str, Any]) -> None:
-        equiv_counts[result.get("equivalent")] = equiv_counts.get(result.get("equivalent"), 0) + 1
-        progress.set_postfix(
-            equiv=equiv_counts[True],
-            not_equiv=equiv_counts[False],
-            unknown=equiv_counts[None],
-        )
-        progress.update(1)
+    def make_checker() -> AnswerChecker:
+        return AnswerChecker(checker_cfg)
 
-    with ThreadPoolExecutor(max_workers=cfg.parallelism) as pool:
-        future_to_idx = {
-            pool.submit(check_record, make_checker(), rec): i
-            for i, rec in enumerate(records)
-        }
+    # Summary counters (decided records already counted in)
+    equiv_counts: Dict[Optional[bool], int] = defaultdict(int)
+    by_method: Dict[str, int] = defaultdict(int)
+    success_total = 0
 
-        done = 0
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                results[idx] = future.result()
-            except Exception as exc:
-                rec = records[idx]
-                results[idx] = {
-                    "problem_id": rec.get("problem_id"),
-                    "attempt": rec.get("attempt"),
-                    "status": rec.get("status"),
-                    "equivalent": None,
-                    "method": "error",
-                    "check_result": {
+    for r in decided_results:
+        equiv_counts[r.get("equivalent")] += 1
+        if r.get("status") == "success":
+            success_total += 1
+            if r.get("equivalent") is True:
+                by_method[r.get("method", "unknown")] += 1
+
+    all_new_results: List[Dict[str, Any]] = []
+
+    with open(output_path, "w", encoding="utf-8") as out_f:
+        # Write carried-over decided records first
+        for r in decided_results:
+            out_f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        out_f.flush()
+
+        def write_result(result: Dict[str, Any]) -> None:
+            with write_lock:
+                out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
+                out_f.flush()
+
+        progress = tqdm(total=total, desc="Checking", unit="rec")
+
+        def _record_done(result: Dict[str, Any]) -> None:
+            equiv_counts[result.get("equivalent")] += 1
+            if result.get("status") == "success":
+                if result.get("equivalent") is True:
+                    by_method[result.get("method", "unknown")] += 1
+            progress.set_postfix(
+                equiv=equiv_counts[True],
+                not_equiv=equiv_counts[False],
+                unknown=equiv_counts[None],
+            )
+            progress.update(1)
+
+        with ThreadPoolExecutor(max_workers=cfg.parallelism) as pool:
+            future_to_idx = {
+                pool.submit(check_record, make_checker(), rec): i
+                for i, rec in enumerate(records_to_check)
+            }
+
+            done = 0
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                rec = records_to_check[idx]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = {
+                        "problem_id": rec.get("problem_id"),
+                        "attempt": rec.get("attempt"),
+                        "status": rec.get("status"),
                         "equivalent": None,
                         "method": "error",
-                        "details": {"error": str(exc)},
-                    },
-                    "all_results": [],
-                }
-            _update_counts(results[idx])
-            done += 1
-            if cfg.verbose and done % 50 == 0:
-                print(f"  {done}/{total} done")
+                        "check_result": {
+                            "equivalent": None,
+                            "method": "error",
+                            "details": {"error": str(exc)},
+                        },
+                        "all_results": [],
+                    }
 
-    progress.close()
+                write_result(result)
+                _record_done(result)
+                all_new_results.append(result)
+                done += 1
+                if cfg.verbose and done % 50 == 0:
+                    print(f"  {done}/{total} done")
 
-    write_jsonl(output_path, results)
+        progress.close()
 
+    # ------------------------------------------------------------------
     # Summary
-    success_records = [r for r in results if r.get("status") == "success"]
+    # ------------------------------------------------------------------
+    all_results = decided_results + all_new_results
+    success_records = [r for r in all_results if r.get("status") == "success"]
     equiv_true = sum(1 for r in success_records if r.get("equivalent") is True)
     inconclusive = sum(1 for r in success_records if r.get("equivalent") is None)
     total_success = len(success_records)
 
-    by_method: Dict[str, int] = {}
-    for r in success_records:
-        if r.get("equivalent") is True:
-            m = r.get("method", "unknown")
-            by_method[m] = by_method.get(m, 0) + 1
-
     print(f"\nResults ({total_success} success records):")
     print(f"  equivalent=True : {equiv_true} ({100*equiv_true/max(total_success,1):.1f}%)")
     print(f"  inconclusive    : {inconclusive} ({100*inconclusive/max(total_success,1):.1f}%)")
-    print(f"  by method: {by_method}")
-    print(f"\nWrote {len(results)} records to {output_path}")
+    print(f"  by method: {dict(by_method)}")
+    print(f"\nWrote {len(all_results)} records to {output_path}")
 
 
 if __name__ == "__main__":
