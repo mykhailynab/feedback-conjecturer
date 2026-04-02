@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 import json
+
+from conjecturing_agents.tools import load_jsonl, write_jsonl
 import argparse
 from copy import deepcopy
 from pathlib import Path
@@ -17,45 +19,16 @@ from conjecturing_agents.tool_calling_backends.lean4_compiler import (
 
 
 # ============================================================
-# JSONL helpers
-# ============================================================
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line_num, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except Exception as exc:
-                print(f"[warn] Failed to parse JSON at {path}:{line_num}: {exc}")
-                continue
-            if not isinstance(obj, dict):
-                print(f"[warn] Non-dict JSON object at {path}:{line_num}; skipping.")
-                continue
-            records.append(obj)
-    return records
-
-
-def write_jsonl(path: Path, records: List[Dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        for rec in records:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-
-# ============================================================
 # Lean / abbrev extraction helpers
 # ============================================================
 
 _ABBREV_NAME_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([A-Za-z0-9_']+)\b",
+    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([\w']+)",
     re.MULTILINE,
 )
 
 _SINGLE_LINE_ABBREV_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([A-Za-z0-9_']+)\b[^\n]*:=.*$",
+    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([\w']+)[^\n]*:=.*$",
     re.MULTILINE,
 )
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+
+from conjecturing_agents.tools import load_jsonl
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,29 +46,6 @@ def fmt_dt_delta_seconds(seconds: float) -> str:
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
-
-
-# ============================================================
-# Event loading
-# ============================================================
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line_num, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except Exception as exc:
-                print(f"[warn] Failed to parse JSON at line {line_num}: {exc}")
-                continue
-            if not isinstance(obj, dict):
-                print(f"[warn] Non-dict JSON object at line {line_num}; skipping.")
-                continue
-            records.append(obj)
-    return records
 
 
 # ============================================================

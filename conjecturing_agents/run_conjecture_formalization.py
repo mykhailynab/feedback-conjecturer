@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -20,29 +19,7 @@ from conjecturing_agents.run_conjecture_formalization.formalization_scheduler im
 from conjecturing_agents.run_conjecture_formalization.logger import (
     RunLogger,
 )
-
-
-# ============================================================
-# Data loading helpers
-# ============================================================
-
-def load_jsonl(path: str) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line_num, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except Exception as exc:
-                print(f"[warn] Failed to parse JSONL line {line_num} in {path}: {exc}")
-                continue
-            if not isinstance(obj, dict):
-                print(f"[warn] Non-dict JSONL line {line_num} in {path}; skipping.")
-                continue
-            records.append(obj)
-    return records
+from conjecturing_agents.tools import load_jsonl
 
 
 def load_references_putnam(path: str) -> List[Dict[str, Any]]:

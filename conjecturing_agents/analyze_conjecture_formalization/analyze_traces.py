@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+
+from conjecturing_agents.tools import load_jsonl
 import math
 import re
 from collections import Counter, OrderedDict
@@ -11,34 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # ============================================================
-# Loading
-# ============================================================
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line_num, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except Exception as exc:
-                print(f"[warn] Failed to parse JSON at {path}:{line_num}: {exc}")
-                continue
-            if not isinstance(obj, dict):
-                print(f"[warn] Non-dict JSON object at {path}:{line_num}; skipping.")
-                continue
-            records.append(obj)
-    return records
-
-
-# ============================================================
 # Helpers
 # ============================================================
 
 _ABBREV_RHS_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+[A-Za-z0-9_']+\b[^\n]*:=\s*(.*)$",
+    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+[\w']+\b[^\n]*:=\s*(.*)$",
     re.MULTILINE,
 )
 

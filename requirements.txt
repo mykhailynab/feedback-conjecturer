@@ -6,4 +6,5 @@ tqdm
 numpy
 sympy
 mpmath
-polars
+jinja2
+transformers
