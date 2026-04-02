@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
+from tqdm import tqdm
+
 from conjecturing_agents.answer_checking.checker import AnswerChecker
 from conjecturing_agents.tools import load_jsonl, write_jsonl
 from conjecturing_agents.check_formalizations.config import (
@@ -66,6 +68,18 @@ def main() -> None:
         print(f"Checking {total} records from {cfg.formalizations_path}")
         print(f"Output: {output_path}")
 
+    progress = tqdm(total=total, desc="Checking", unit="rec")
+    equiv_counts: Dict[Any, int] = {True: 0, False: 0, None: 0}
+
+    def _update_counts(result: Dict[str, Any]) -> None:
+        equiv_counts[result.get("equivalent")] = equiv_counts.get(result.get("equivalent"), 0) + 1
+        progress.set_postfix(
+            equiv=equiv_counts[True],
+            not_equiv=equiv_counts[False],
+            unknown=equiv_counts[None],
+        )
+        progress.update(1)
+
     with ThreadPoolExecutor(max_workers=cfg.parallelism) as pool:
         future_to_idx = {
             pool.submit(check_record, make_checker(), rec): i
@@ -92,9 +106,12 @@ def main() -> None:
                     },
                     "all_results": [],
                 }
+            _update_counts(results[idx])
             done += 1
             if cfg.verbose and done % 50 == 0:
                 print(f"  {done}/{total} done")
+
+    progress.close()
 
     write_jsonl(output_path, results)
 
