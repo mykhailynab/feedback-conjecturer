@@ -22,7 +22,7 @@ class CheckFormalizationsConfig:
     lean_workspace_subdir: str = ".conjecturing_agents/answer_checking"
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
-    lean_max_memory_megabytes: int = 2 * 1024  # 0 = no limit
+    lean_max_memory_megabytes: int = 4 * 1024  # 0 = no limit
 
     # Heuristics
     use_string_match: bool = True
@@ -200,7 +200,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         default=CheckFormalizationsConfig.lean_max_memory_megabytes,
         help=(
             "Maximum virtual memory (megabytes) for each lake/lean subprocess. "
-            "0 means no limit. Example: 2 * 1024 for 2 GiB."
+            "0 means no limit. Example: 4 * 1024 for 4 GiB."
         ),
     )
 
@@ -377,7 +377,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
     p.add_argument(
         "--goedel-vllm-extra-server-args",
         nargs="*",
-        default=CheckFormalizationsConfig.goedel_vllm_extra_server_args,
+        default=[],
         help="Extra CLI arguments forwarded verbatim to the vLLM server (backend=vllm, manage-server=True).",
     )
     p.add_argument(

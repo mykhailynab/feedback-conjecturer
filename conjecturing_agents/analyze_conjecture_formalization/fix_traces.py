@@ -410,10 +410,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--lean-max-memory-megabytes",
         type=int,
-        default=2 * 1024,
+        default=4 * 1024,
         help=(
             "Maximum virtual memory (megabytes) for each lake/lean subprocess. "
-            "Example: 2 * 1024 for 2 GiB."
+            "Example: 4 * 1024 for 4 GiB."
         ),
     )
     p.add_argument(

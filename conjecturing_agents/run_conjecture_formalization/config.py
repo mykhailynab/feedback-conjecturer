@@ -92,7 +92,7 @@ class RunConjectureFormalizationConfig:
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
     lean_workspace_subdir: str = ".conjecturing_agents/lean_tool_runs"
-    lean_max_memory_megabytes: int = 2 * 1024  # 2 GiB
+    lean_max_memory_megabytes: int = 4 * 1024  # 4 GiB
 
     # -----------------------------
     # Logging
@@ -324,7 +324,7 @@ def parse_args_and_validate() -> RunConjectureFormalizationConfig:
         default=RunConjectureFormalizationConfig.lean_max_memory_megabytes,
         help=(
             "Maximum virtual memory (megabytes) for each lake/lean subprocess. "
-            "Example: 2 * 1024 for 2 GiB."
+            "Example: 4 * 1024 for 4 GiB."
         ),
     )
 

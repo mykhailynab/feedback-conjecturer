@@ -25,7 +25,7 @@ class AnswerCheckerConfig:
     lean_jobs: int = 4
 
     # Memory limit for the lake/lean subprocess (bytes); 0 = no limit
-    lean_max_memory_megabytes: int = 2 * 1024  # 2 GiB
+    lean_max_memory_megabytes: int = 4 * 1024  # 4 GiB
 
     # Which heuristics to run
     use_string_match: bool = True
