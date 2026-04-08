@@ -102,6 +102,7 @@ def main() -> None:
     # Summary counters (decided records already counted in)
     equiv_counts: Dict[Optional[bool], int] = defaultdict(int)
     by_method: Dict[str, int] = defaultdict(int)
+    by_error_details: Dict[str, int] = defaultdict(int)
     success_total = 0
 
     for r in decided_results:
@@ -131,6 +132,12 @@ def main() -> None:
             if result.get("status") == "success":
                 if result.get("equivalent") is True:
                     by_method[result.get("method", "unknown")] += 1
+                elif result.get("equivalent") is None:
+                    by_error_details[(
+                        result.get("check_result", {})
+                              .get("details", {})
+                              .get("error", "unknown")
+                    )] += 1
             progress.set_postfix(
                 equiv=equiv_counts[True],
                 not_equiv=equiv_counts[False],
@@ -184,6 +191,8 @@ def main() -> None:
     print(f"  equivalent=True : {equiv_true} ({100*equiv_true/max(total_success,1):.1f}%)")
     print(f"  inconclusive    : {inconclusive} ({100*inconclusive/max(total_success,1):.1f}%)")
     print(f"  by method: {dict(by_method)}")
+    if by_error_details:
+        print(f"  errors: {dict(by_error_details)}")
     print(f"\nWrote {len(all_results)} records to {output_path}")
 
 

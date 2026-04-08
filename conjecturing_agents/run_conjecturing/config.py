@@ -50,7 +50,7 @@ class RunConfig:
 
     # Global orchestration
     agent_parallelism: int = 8
-    attempts_per_problem: int = 16
+    attempts_per_problem: int = 2
     max_problems: int = 0
     seed: int = 42
 

@@ -8,3 +8,4 @@ sympy
 mpmath
 jinja2
 transformers
+ollama

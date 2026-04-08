@@ -22,11 +22,27 @@ class CheckFormalizationsConfig:
     lean_workspace_subdir: str = ".conjecturing_agents/answer_checking"
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
-    lean_max_memory_bytes: int = 17179869184  # 0 = no limit
+    lean_max_memory_megabytes: int = 2 * 1024  # 0 = no limit
 
     # Heuristics
     use_string_match: bool = True
     use_lean_equiv: bool = True
+    use_goedel_prover: bool = False
+
+    # Goedel prover settings
+    goedel_chat_template_path: str = "goedel_template.jinja"
+    goedel_max_rounds: int = 2
+    goedel_max_tokens: int = 16384
+    goedel_temperature: float = 0.6
+    goedel_top_p: float = 0.95
+    goedel_context_tokens: int = 40960
+    goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
+    goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
+    goedel_ollama_model: str = "goedel-v2:latest"
+    goedel_ollama_host: str = "http://localhost:11434"
+    goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
+    goedel_vllm_model_name: str = "goedel"
+    goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
 
     # Orchestration
     parallelism: int = 4
@@ -71,9 +87,23 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         lean_workspace_subdir=cfg.lean_workspace_subdir,
         lean_timeout_seconds=cfg.lean_timeout_seconds,
         lean_jobs=cfg.lean_jobs,
-        lean_max_memory_bytes=cfg.lean_max_memory_bytes,
+        lean_max_memory_megabytes=cfg.lean_max_memory_megabytes,
         use_string_match=cfg.use_string_match,
         use_lean_equiv=cfg.use_lean_equiv,
+        use_goedel_prover=cfg.use_goedel_prover,
+        goedel_chat_template_path=cfg.goedel_chat_template_path,
+        goedel_max_rounds=cfg.goedel_max_rounds,
+        goedel_max_tokens=cfg.goedel_max_tokens,
+        goedel_temperature=cfg.goedel_temperature,
+        goedel_top_p=cfg.goedel_top_p,
+        goedel_context_tokens=cfg.goedel_context_tokens,
+        goedel_lean_workspace_subdir=cfg.goedel_lean_workspace_subdir,
+        goedel_backend_type=cfg.goedel_backend_type,
+        goedel_ollama_model=cfg.goedel_ollama_model,
+        goedel_ollama_host=cfg.goedel_ollama_host,
+        goedel_vllm_base_url=cfg.goedel_vllm_base_url,
+        goedel_vllm_model_name=cfg.goedel_vllm_model_name,
+        goedel_tokenizer_path=cfg.goedel_tokenizer_path,
     )
 
 
@@ -129,12 +159,12 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         help="Number of parallel jobs passed to lake env lean -j.",
     )
     p.add_argument(
-        "--lean-max-memory-bytes",
+        "--lean-max-memory-megabytes",
         type=int,
-        default=CheckFormalizationsConfig.lean_max_memory_bytes,
+        default=CheckFormalizationsConfig.lean_max_memory_megabytes,
         help=(
-            "Maximum virtual memory (bytes) for each lake/lean subprocess. "
-            "0 means no limit. Example: 17179869184 for 16 GiB."
+            "Maximum virtual memory (megabytes) for each lake/lean subprocess. "
+            "0 means no limit. Example: 2 * 1024 for 2 GiB."
         ),
     )
 
@@ -152,6 +182,68 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         action="store_false",
         default=CheckFormalizationsConfig.use_lean_equiv,
         help="Disable Lean equivalence proof check (heuristic 2).",
+    )
+    p.add_argument(
+        "--goedel",
+        dest="use_goedel_prover",
+        action="store_true",
+        default=CheckFormalizationsConfig.use_goedel_prover,
+        help="Enable Goedel-prover equivalence check (heuristic 3).",
+    )
+    p.add_argument(
+        "--goedel-chat-template-path",
+        default=CheckFormalizationsConfig.goedel_chat_template_path,
+        help="Path to the Jinja2 chat template for the Goedel model.",
+    )
+    p.add_argument(
+        "--goedel-max-rounds",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_max_rounds,
+        help="Self-correction rounds for Goedel prover (0 = initial attempt only).",
+    )
+    p.add_argument(
+        "--goedel-max-tokens",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_max_tokens,
+        help="Max tokens to generate per Goedel round.",
+    )
+    p.add_argument(
+        "--goedel-context-tokens",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_context_tokens,
+        help="Model max context length for pre-flight token budget checks.",
+    )
+    p.add_argument(
+        "--goedel-backend",
+        dest="goedel_backend_type",
+        choices=["ollama", "vllm"],
+        default=CheckFormalizationsConfig.goedel_backend_type,
+        help="Inference backend for the Goedel prover.",
+    )
+    p.add_argument(
+        "--goedel-ollama-model",
+        default=CheckFormalizationsConfig.goedel_ollama_model,
+        help="Ollama model name (backend=ollama).",
+    )
+    p.add_argument(
+        "--goedel-ollama-host",
+        default=CheckFormalizationsConfig.goedel_ollama_host,
+        help="Ollama server URL (backend=ollama).",
+    )
+    p.add_argument(
+        "--goedel-vllm-base-url",
+        default=CheckFormalizationsConfig.goedel_vllm_base_url,
+        help="vLLM OpenAI-compatible base URL (backend=vllm).",
+    )
+    p.add_argument(
+        "--goedel-vllm-model-name",
+        default=CheckFormalizationsConfig.goedel_vllm_model_name,
+        help="Served model name for the vLLM endpoint (backend=vllm).",
+    )
+    p.add_argument(
+        "--goedel-tokenizer-path",
+        default=CheckFormalizationsConfig.goedel_tokenizer_path,
+        help="HF tokenizer path for exact token counting (required when --goedel is set).",
     )
 
     # Orchestration
@@ -204,9 +296,20 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         lean_workspace_subdir=args.lean_workspace_subdir,
         lean_timeout_seconds=args.lean_timeout_seconds,
         lean_jobs=args.lean_jobs,
-        lean_max_memory_bytes=args.lean_max_memory_bytes,
+        lean_max_memory_megabytes=args.lean_max_memory_megabytes,
         use_string_match=args.use_string_match,
         use_lean_equiv=args.use_lean_equiv,
+        use_goedel_prover=args.use_goedel_prover,
+        goedel_chat_template_path=args.goedel_chat_template_path,
+        goedel_max_rounds=args.goedel_max_rounds,
+        goedel_max_tokens=args.goedel_max_tokens,
+        goedel_context_tokens=args.goedel_context_tokens,
+        goedel_backend_type=args.goedel_backend_type,
+        goedel_ollama_model=args.goedel_ollama_model,
+        goedel_ollama_host=args.goedel_ollama_host,
+        goedel_vllm_base_url=args.goedel_vllm_base_url,
+        goedel_vllm_model_name=args.goedel_vllm_model_name,
+        goedel_tokenizer_path=args.goedel_tokenizer_path,
         parallelism=args.parallelism,
         max_records=args.max_records,
         resume=args.resume,
