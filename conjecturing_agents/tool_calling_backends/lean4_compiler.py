@@ -17,6 +17,7 @@ from conjecturing_agents.inference_backends.vllm_harmony import (
     ToolDispatchResult,
     ToolInvocation,
     make_tool_message,
+    TextContent
 )
 
 
@@ -679,12 +680,12 @@ class Lean4CompilerToolBackend:
         if not invocation.message.content:
             return ""
 
-        parts: List[str] = []
+        chunks = []
         for item in invocation.message.content:
-            text = getattr(item, "text", None)
-            if text is not None:
-                parts.append(text)
-        return "\n".join(parts)
+            if not isinstance(item, TextContent):
+                continue
+            chunks.append(item.text)
+        return "\n".join(chunks)
 
 
 # ============================================================

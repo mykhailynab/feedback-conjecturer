@@ -12,8 +12,10 @@ after generation, making it unsuitable for pre-flight context budget checks.
 from __future__ import annotations
 
 import time
+import ollama
+from typing import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from transformers import AutoTokenizer
 
 from .raw_backend import RawBackend, RawGenerationConfig, RawGenerationResult
 
@@ -32,16 +34,6 @@ class OllamaConfig:
     # Required for context-budget enforcement before generation.
     # ------------------------------------------------------------------ #
     tokenizer_path: str = ""
-
-
-def _get_response_attr(resp, key: str, default):
-    """Access ``resp.key`` or ``resp[key]`` gracefully across ollama versions."""
-    val = getattr(resp, key, None)
-    if val is not None:
-        return val
-    if hasattr(resp, "get"):
-        return resp.get(key, default)
-    return default
 
 
 class OllamaBackend(RawBackend):
@@ -64,7 +56,6 @@ class OllamaBackend(RawBackend):
 
     def _get_client(self):
         if self._client is None:
-            import ollama
             self._client = ollama.Client(
                 host=self.cfg.host,
                 timeout=self.cfg.client_timeout,
@@ -82,13 +73,14 @@ class OllamaBackend(RawBackend):
             raise ValueError(
                 "OllamaBackend: set tokenizer_path for exact token counting."
             )
-        from transformers import AutoTokenizer
         self._tokenizer = AutoTokenizer.from_pretrained(
             self.cfg.tokenizer_path, use_fast=True
         )
         return self._tokenizer
 
     def count_tokens(self, text: str) -> int:
+        # add_special_tokens=False because text is already pre-rendered, so no
+        # need to add new special tokens.
         return len(self._get_tokenizer().encode(text, add_special_tokens=False))
 
     # ------------------------------------------------------------------
@@ -121,11 +113,12 @@ class OllamaBackend(RawBackend):
             options=options,
             stream=False,
         )
+        print(list(resp.keys()))
         elapsed_ms = int((time.time() - t0) * 1000)
 
-        text = _get_response_attr(resp, "response", "")
-        prompt_tokens = _get_response_attr(resp, "prompt_eval_count", -1)
-        generated_tokens = _get_response_attr(resp, "eval_count", -1)
+        text = resp.response
+        prompt_tokens = len(resp.context) if resp.context is not None else None
+        generated_tokens = len(resp.logprobs) if resp.logprobs is not None else None
 
         return RawGenerationResult(
             text=text,
@@ -144,7 +137,7 @@ class OllamaBackend(RawBackend):
             options=options,
             stream=True,
         ):
-            chunk = _get_response_attr(part, "response", "")
+            chunk = part.response
             if chunk:
                 yield chunk
 

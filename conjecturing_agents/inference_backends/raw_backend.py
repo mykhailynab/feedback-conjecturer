@@ -40,9 +40,9 @@ class RawGenerationResult:
     text: str
     elapsed_ms: int
 
-    # Token counts; -1 means the backend did not report them.
-    prompt_tokens: int = -1
-    generated_tokens: int = -1
+    # Token counts; None means the backend did not report them.
+    prompt_tokens: Optional[int] = None
+    generated_tokens: Optional[int] = None
 
     timed_out: bool = False
 

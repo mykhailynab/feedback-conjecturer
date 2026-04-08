@@ -88,7 +88,6 @@ def format_lean_errors(
 ) -> str:
     """
     Format Lean JSON errors with ``<error>...</error>`` markers.
-    (Mirrors get_error_str from test_goedel.py.)
     """
     err_str = ""
     code_lines = code.split("\n")

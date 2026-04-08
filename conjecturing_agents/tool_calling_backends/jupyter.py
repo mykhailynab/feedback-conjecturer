@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from jupyter_client import KernelManager
-from openai_harmony import ToolNamespaceConfig
+from openai_harmony import ToolNamespaceConfig, TextContent
 
 from conjecturing_agents.inference_backends.vllm_harmony import (
     ToolDispatchResult,
@@ -505,9 +505,9 @@ class JupyterToolBackend:
     def _extract_request_text(invocation: ToolInvocation) -> str:
         if not invocation.message.content:
             return ""
-        parts: List[str] = []
+        chunks = []
         for item in invocation.message.content:
-            text = getattr(item, "text", None)
-            if text is not None:
-                parts.append(text)
-        return "\n".join(parts)
+            if not isinstance(item, TextContent):
+                continue
+            chunks.append(item.text)
+        return "\n".join(chunks)

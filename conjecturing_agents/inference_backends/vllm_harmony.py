@@ -729,21 +729,21 @@ class VLLMHarmonyBackend:
         if not dispatch.record:
             dispatch.record = {
                 "recipient": recipient,
-                "request_text": self._message_text(message),
-                "response_texts": [self._message_text(m) for m in dispatch.messages],
+                "request_text": self.get_message_text(message),
+                "response_texts": [self.get_message_text(m) for m in dispatch.messages],
             }
 
         return dispatch
 
     @staticmethod
-    def _message_text(message: Message) -> str:
-        if not getattr(message, "content", None):
+    def get_message_text(message: Message) -> str:
+        if not message.content:
             return ""
         chunks = []
         for item in message.content:
-            text = getattr(item, "text", None)
-            if text is not None:
-                chunks.append(text)
+            if not isinstance(item, TextContent):
+                continue
+            chunks.append(item.text)
         return "\n".join(chunks)
 
     # --------------------------------------------------------
@@ -956,7 +956,7 @@ class VLLMHarmonyBackend:
                     "turn": turn_idx,
                     "message_channel": last_message.channel,
                     "message_recipient": last_message.recipient,
-                    "message_text_len": len(self._message_text(last_message)),
+                    "message_text_len": len(self.get_message_text(last_message)),
                 })
 
                 if last_message.recipient:

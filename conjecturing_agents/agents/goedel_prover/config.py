@@ -34,7 +34,7 @@ class GoedelProverConfig:
     # Lean compiler used inside the generation loop (required).
     lean: Optional[LeanCompilerConfig] = None
 
-    # Whether to truncate error lists to 8 (matches default in test_goedel.py).
+    # Whether to truncate error lists to 8 (matches the default pipeline).
     truncate_errors: bool = True
 
 

@@ -14,7 +14,7 @@ from jinja2 import Environment
 
 # ============================================================
 # Prompt constants
-# (kept verbatim from test_goedel.py — do NOT paraphrase)
+# (kept verbatim from the original pipeline)
 # ============================================================
 
 # build_initial_messages content after .strip()
@@ -52,7 +52,6 @@ def render_with_template(
 ) -> str:
     """
     Render an HF-style Jinja2 chat template into a raw prompt string.
-    (Mirrors render_with_template from test_goedel.py.)
     """
     class _Obj:
         def __init__(self, d: Dict[str, Any]) -> None:

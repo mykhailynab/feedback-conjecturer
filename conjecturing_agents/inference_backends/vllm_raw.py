@@ -216,9 +216,9 @@ class VLLMRawBackend(RawBackend):
         elapsed_ms = int((time.time() - t0) * 1000)
 
         text = resp.choices[0].text or ""
-        usage = getattr(resp, "usage", None)
-        prompt_tokens = getattr(usage, "prompt_tokens", -1) if usage else -1
-        generated_tokens = getattr(usage, "completion_tokens", -1) if usage else -1
+        usage = resp.usage
+        prompt_tokens = usage.prompt_tokens if usage is not None else None
+        generated_tokens = usage.completion_tokens if usage is not None else None
 
         return RawGenerationResult(
             text=text,

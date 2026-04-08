@@ -169,12 +169,7 @@ def solver_terminate_on_message(
     if message.channel != "final":
         return None
 
-    text_parts = []
-    for item in message.content or []:
-        text = getattr(item, "text", None)
-        if text is not None:
-            text_parts.append(text)
-    final_text = "\n".join(text_parts)
+    final_text = VLLMHarmonyBackend.get_message_text(message)
 
     boxed = extract_last_boxed_content(final_text)
     if boxed is not None:
