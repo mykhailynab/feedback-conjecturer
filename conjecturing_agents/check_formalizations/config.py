@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 from conjecturing_agents.answer_checking.checker import AnswerCheckerConfig
@@ -43,6 +43,21 @@ class CheckFormalizationsConfig:
     goedel_ollama_host: str = "http://localhost:11434"
     goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
     goedel_vllm_model_name: str = "goedel"
+    goedel_vllm_api_key: str = "sk-local"
+    goedel_vllm_client_timeout: int = 240
+    goedel_vllm_manage_server: bool = False
+    goedel_vllm_model_path: str = ""
+    goedel_vllm_port: int = 8001
+    goedel_vllm_host: str = "0.0.0.0"
+    goedel_vllm_server_timeout: int = 240
+    goedel_vllm_server_log_path: str = "vllm_goedel_server.log"
+    goedel_vllm_dtype: str = "bfloat16"
+    goedel_vllm_kv_cache_dtype: str = "fp8_e4m3"
+    goedel_vllm_gpu_memory_utilization: float = 0.96
+    goedel_vllm_max_num_seqs: int = 32
+    goedel_vllm_stream_interval: int = 200
+    goedel_vllm_enable_prefix_caching: bool = True
+    goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
     goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
 
     # Logging / debug
@@ -108,6 +123,21 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         goedel_ollama_host=cfg.goedel_ollama_host,
         goedel_vllm_base_url=cfg.goedel_vllm_base_url,
         goedel_vllm_model_name=cfg.goedel_vllm_model_name,
+        goedel_vllm_api_key=cfg.goedel_vllm_api_key,
+        goedel_vllm_client_timeout=cfg.goedel_vllm_client_timeout,
+        goedel_vllm_manage_server=cfg.goedel_vllm_manage_server,
+        goedel_vllm_model_path=cfg.goedel_vllm_model_path,
+        goedel_vllm_port=cfg.goedel_vllm_port,
+        goedel_vllm_host=cfg.goedel_vllm_host,
+        goedel_vllm_server_timeout=cfg.goedel_vllm_server_timeout,
+        goedel_vllm_server_log_path=cfg.goedel_vllm_server_log_path,
+        goedel_vllm_dtype=cfg.goedel_vllm_dtype,
+        goedel_vllm_kv_cache_dtype=cfg.goedel_vllm_kv_cache_dtype,
+        goedel_vllm_gpu_memory_utilization=cfg.goedel_vllm_gpu_memory_utilization,
+        goedel_vllm_max_num_seqs=cfg.goedel_vllm_max_num_seqs,
+        goedel_vllm_stream_interval=cfg.goedel_vllm_stream_interval,
+        goedel_vllm_enable_prefix_caching=cfg.goedel_vllm_enable_prefix_caching,
+        goedel_vllm_extra_server_args=cfg.goedel_vllm_extra_server_args,
         goedel_tokenizer_path=cfg.goedel_tokenizer_path,
         goedel_print_agent_conv=cfg.print_agent_conv,
     )
@@ -265,6 +295,92 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         help="Served model name for the vLLM endpoint (backend=vllm).",
     )
     p.add_argument(
+        "--goedel-vllm-api-key",
+        default=CheckFormalizationsConfig.goedel_vllm_api_key,
+        help="API key for the vLLM endpoint (backend=vllm).",
+    )
+    p.add_argument(
+        "--goedel-vllm-client-timeout",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_vllm_client_timeout,
+        help="HTTP client timeout in seconds for vLLM requests (backend=vllm).",
+    )
+    p.add_argument(
+        "--goedel-vllm-manage-server",
+        dest="goedel_vllm_manage_server",
+        action="store_true",
+        default=CheckFormalizationsConfig.goedel_vllm_manage_server,
+        help="Start and manage a vLLM server subprocess (backend=vllm).",
+    )
+    p.add_argument(
+        "--goedel-vllm-model-path",
+        default=CheckFormalizationsConfig.goedel_vllm_model_path,
+        help="Path to the model weights (required when --goedel-vllm-manage-server is set).",
+    )
+    p.add_argument(
+        "--goedel-vllm-port",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_vllm_port,
+        help="Port for the managed vLLM server (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-host",
+        default=CheckFormalizationsConfig.goedel_vllm_host,
+        help="Host for the managed vLLM server (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-server-timeout",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_vllm_server_timeout,
+        help="Seconds to wait for the vLLM server to become ready (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-server-log-path",
+        default=CheckFormalizationsConfig.goedel_vllm_server_log_path,
+        help="File path for vLLM server stdout/stderr logs (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-dtype",
+        default=CheckFormalizationsConfig.goedel_vllm_dtype,
+        help="Model weight dtype passed to vLLM (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-kv-cache-dtype",
+        default=CheckFormalizationsConfig.goedel_vllm_kv_cache_dtype,
+        help="KV-cache dtype passed to vLLM (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-gpu-memory-utilization",
+        type=float,
+        default=CheckFormalizationsConfig.goedel_vllm_gpu_memory_utilization,
+        help="GPU memory utilization fraction for vLLM (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-max-num-seqs",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_vllm_max_num_seqs,
+        help="Maximum number of concurrent sequences for vLLM (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-stream-interval",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_vllm_stream_interval,
+        help="Token streaming interval for vLLM (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-no-prefix-caching",
+        dest="goedel_vllm_enable_prefix_caching",
+        action="store_false",
+        default=CheckFormalizationsConfig.goedel_vllm_enable_prefix_caching,
+        help="Disable prefix caching in vLLM (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
+        "--goedel-vllm-extra-server-args",
+        nargs="*",
+        default=CheckFormalizationsConfig.goedel_vllm_extra_server_args,
+        help="Extra CLI arguments forwarded verbatim to the vLLM server (backend=vllm, manage-server=True).",
+    )
+    p.add_argument(
         "--goedel-tokenizer-path",
         default=CheckFormalizationsConfig.goedel_tokenizer_path,
         help="HF tokenizer path for exact token counting (required when --goedel is set).",
@@ -343,6 +459,21 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         goedel_ollama_host=args.goedel_ollama_host,
         goedel_vllm_base_url=args.goedel_vllm_base_url,
         goedel_vllm_model_name=args.goedel_vllm_model_name,
+        goedel_vllm_api_key=args.goedel_vllm_api_key,
+        goedel_vllm_client_timeout=args.goedel_vllm_client_timeout,
+        goedel_vllm_manage_server=args.goedel_vllm_manage_server,
+        goedel_vllm_model_path=args.goedel_vllm_model_path,
+        goedel_vllm_port=args.goedel_vllm_port,
+        goedel_vllm_host=args.goedel_vllm_host,
+        goedel_vllm_server_timeout=args.goedel_vllm_server_timeout,
+        goedel_vllm_server_log_path=args.goedel_vllm_server_log_path,
+        goedel_vllm_dtype=args.goedel_vllm_dtype,
+        goedel_vllm_kv_cache_dtype=args.goedel_vllm_kv_cache_dtype,
+        goedel_vllm_gpu_memory_utilization=args.goedel_vllm_gpu_memory_utilization,
+        goedel_vllm_max_num_seqs=args.goedel_vllm_max_num_seqs,
+        goedel_vllm_stream_interval=args.goedel_vllm_stream_interval,
+        goedel_vllm_enable_prefix_caching=args.goedel_vllm_enable_prefix_caching,
+        goedel_vllm_extra_server_args=args.goedel_vllm_extra_server_args or [],
         goedel_tokenizer_path=args.goedel_tokenizer_path,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

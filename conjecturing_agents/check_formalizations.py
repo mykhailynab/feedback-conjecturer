@@ -187,12 +187,31 @@ def main() -> None:
     inconclusive = sum(1 for r in success_records if r.get("equivalent") is None)
     total_success = len(success_records)
 
+    # Count lean_equiv OOM and timeout events across all new results
+    lean_equiv_total = 0
+    lean_equiv_timed_out = 0
+    lean_equiv_oom = 0
+    for r in all_new_results:
+        for heuristic in r.get("all_results", []):
+            if heuristic.get("method") != "lean_equiv":
+                continue
+            for attempt in heuristic.get("details", {}).get("attempts", []):
+                lean_equiv_total += 1
+                if attempt.get("timed_out"):
+                    lean_equiv_timed_out += 1
+                if attempt.get("oom"):
+                    lean_equiv_oom += 1
+
     print(f"\nResults ({total_success} success records):")
     print(f"  equivalent=True : {equiv_true} ({100*equiv_true/max(total_success,1):.1f}%)")
     print(f"  inconclusive    : {inconclusive} ({100*inconclusive/max(total_success,1):.1f}%)")
     print(f"  by method: {dict(by_method)}")
     if by_error_details:
         print(f"  errors: {dict(by_error_details)}")
+    if lean_equiv_total > 0:
+        print(f"\nLean equiv attempts (new records only): {lean_equiv_total}")
+        print(f"  timed out : {lean_equiv_timed_out} ({100*lean_equiv_timed_out/lean_equiv_total:.1f}%)")
+        print(f"  OOM       : {lean_equiv_oom} ({100*lean_equiv_oom/lean_equiv_total:.1f}%)")
     print(f"\nWrote {len(all_results)} records to {output_path}")
 
 

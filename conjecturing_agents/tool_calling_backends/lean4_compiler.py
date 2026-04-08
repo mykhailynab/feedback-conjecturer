@@ -42,6 +42,7 @@ class LeanCompileResult:
 
     # Execution metadata
     timed_out: bool = False
+    oom: bool = False
     elapsed_ms: int = 0
     returncode: Optional[int] = None
     command: List[str] = field(default_factory=list)
@@ -511,6 +512,8 @@ class Lean4CompilerBackend:
             max_messages=self.cfg.max_formatted_messages,
         )
 
+        oom = not timed_out and "excessive memory" in stderr
+
         result = LeanCompileResult(
             ok=not hard_failure,
             stdout=stdout,
@@ -521,6 +524,7 @@ class Lean4CompilerBackend:
             sorry_warnings=sorry_warnings,
             non_json_stdout_lines=parsed["non_json_stdout_lines"],
             timed_out=timed_out,
+            oom=oom,
             elapsed_ms=elapsed_ms,
             returncode=returncode,
             command=cmd,

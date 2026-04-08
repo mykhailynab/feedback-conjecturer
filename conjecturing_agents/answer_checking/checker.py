@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from conjecturing_agents.agents.conjecture_formalizer import (
     extract_rhs_from_abbrev_declaration,
@@ -54,6 +54,21 @@ class AnswerCheckerConfig:
     # vLLM backend (used when goedel_backend_type="vllm")
     goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
     goedel_vllm_model_name: str = "goedel"
+    goedel_vllm_api_key: str = "sk-local"
+    goedel_vllm_client_timeout: int = 240
+    goedel_vllm_manage_server: bool = False
+    goedel_vllm_model_path: str = ""
+    goedel_vllm_port: int = 8001
+    goedel_vllm_host: str = "0.0.0.0"
+    goedel_vllm_server_timeout: int = 240
+    goedel_vllm_server_log_path: str = "vllm_goedel_server.log"
+    goedel_vllm_dtype: str = "bfloat16"
+    goedel_vllm_kv_cache_dtype: str = "fp8_e4m3"
+    goedel_vllm_gpu_memory_utilization: float = 0.96
+    goedel_vllm_max_num_seqs: int = 32
+    goedel_vllm_stream_interval: int = 200
+    goedel_vllm_enable_prefix_caching: bool = True
+    goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
 
     # HF tokenizer path for exact token counting (required for either backend)
     goedel_tokenizer_path: str = ""
@@ -136,7 +151,23 @@ class AnswerChecker:
                 self._goedel_backend = VLLMRawBackend(VLLMRawConfig(
                     base_url=self.cfg.goedel_vllm_base_url,
                     served_model_name=self.cfg.goedel_vllm_model_name,
+                    api_key=self.cfg.goedel_vllm_api_key,
+                    client_timeout=self.cfg.goedel_vllm_client_timeout,
                     tokenizer_path=self.cfg.goedel_tokenizer_path,
+                    manage_server=self.cfg.goedel_vllm_manage_server,
+                    model_path=self.cfg.goedel_vllm_model_path,
+                    port=self.cfg.goedel_vllm_port,
+                    host=self.cfg.goedel_vllm_host,
+                    server_timeout=self.cfg.goedel_vllm_server_timeout,
+                    server_log_path=self.cfg.goedel_vllm_server_log_path,
+                    dtype=self.cfg.goedel_vllm_dtype,
+                    kv_cache_dtype=self.cfg.goedel_vllm_kv_cache_dtype,
+                    context_tokens=self.cfg.goedel_context_tokens,
+                    gpu_memory_utilization=self.cfg.goedel_vllm_gpu_memory_utilization,
+                    max_num_seqs=self.cfg.goedel_vllm_max_num_seqs,
+                    stream_interval=self.cfg.goedel_vllm_stream_interval,
+                    enable_prefix_caching=self.cfg.goedel_vllm_enable_prefix_caching,
+                    extra_server_args=self.cfg.goedel_vllm_extra_server_args,
                 ))
             else:
                 from conjecturing_agents.inference_backends.ollama_backend import (

@@ -112,6 +112,7 @@ def check_lean_equiv(
             "tactic_block": tactic_block,
             "ok": result.ok,
             "timed_out": result.timed_out,
+            "oom": result.oom,
             "elapsed_ms": result.elapsed_ms,
             "json_error_count": len(result.json_errors),
             "sorry_warning_count": len(result.sorry_warnings),
