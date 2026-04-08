@@ -35,6 +35,7 @@ class CheckFormalizationsConfig:
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6
     goedel_top_p: float = 0.95
+    goedel_repeat_penalty: float = 1.0
     goedel_context_tokens: int = 40960
     goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
     goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
@@ -96,6 +97,7 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         goedel_max_tokens=cfg.goedel_max_tokens,
         goedel_temperature=cfg.goedel_temperature,
         goedel_top_p=cfg.goedel_top_p,
+        goedel_repeat_penalty=cfg.goedel_repeat_penalty,
         goedel_context_tokens=cfg.goedel_context_tokens,
         goedel_lean_workspace_subdir=cfg.goedel_lean_workspace_subdir,
         goedel_backend_type=cfg.goedel_backend_type,
@@ -208,6 +210,24 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         help="Max tokens to generate per Goedel round.",
     )
     p.add_argument(
+        "--goedel-temperature",
+        type=float,
+        default=CheckFormalizationsConfig.goedel_temperature,
+        help="Sampling temperature for the Goedel model.",
+    )
+    p.add_argument(
+        "--goedel-top-p",
+        type=float,
+        default=CheckFormalizationsConfig.goedel_top_p,
+        help="Top-p (nucleus) sampling parameter for the Goedel model.",
+    )
+    p.add_argument(
+        "--goedel-repeat-penalty",
+        type=float,
+        default=CheckFormalizationsConfig.goedel_repeat_penalty,
+        help="Repetition penalty for the Goedel model (1.0 = no penalty).",
+    )
+    p.add_argument(
         "--goedel-context-tokens",
         type=int,
         default=CheckFormalizationsConfig.goedel_context_tokens,
@@ -303,6 +323,9 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,
         goedel_max_tokens=args.goedel_max_tokens,
+        goedel_temperature=args.goedel_temperature,
+        goedel_top_p=args.goedel_top_p,
+        goedel_repeat_penalty=args.goedel_repeat_penalty,
         goedel_context_tokens=args.goedel_context_tokens,
         goedel_backend_type=args.goedel_backend_type,
         goedel_ollama_model=args.goedel_ollama_model,

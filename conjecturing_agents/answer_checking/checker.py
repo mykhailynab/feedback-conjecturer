@@ -40,6 +40,7 @@ class AnswerCheckerConfig:
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6
     goedel_top_p: float = 0.95
+    goedel_repeat_penalty: float = 1.0
     goedel_context_tokens: int = 40960
     goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
 
@@ -118,6 +119,7 @@ class AnswerChecker:
                 max_tokens=self.cfg.goedel_max_tokens,
                 temperature=self.cfg.goedel_temperature,
                 top_p=self.cfg.goedel_top_p,
+                repeat_penalty=self.cfg.goedel_repeat_penalty,
                 context_tokens=self.cfg.goedel_context_tokens,
                 lean=goedel_lean_cfg,
             )

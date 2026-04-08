@@ -5,9 +5,9 @@ Takes a Lean theorem statement (ending in ``:= by sorry``), renders a prompt
 using the model's Jinja2 chat template, generates a proof via multi-round
 self-correction, and compiles the result with Lean.
 
-Prompts are kept verbatim from the original Goedel pipeline (test_goedel.py)
-because the fine-tuned model is sensitive to the exact prompt format it was
-trained on.
+Prompts are kept verbatim from the original Goedel pipeline because the
+fine-tuned model is sensitive to the exact prompt format it was trained on.
+TODO: add tests for this. The original pipeline is at https://github.com/Goedel-LM/Goedel-Prover-V2
 
 Supports both VLLMRawBackend and OllamaBackend via the RawBackend interface.
 """
@@ -264,6 +264,7 @@ class GoedelProverConfig:
     max_tokens: int = 16384
     temperature: float = 0.6
     top_p: float = 0.95
+    repeat_penalty: float = 1.0
 
     # Context budget — must match the model's max context length.
     # Prompts + max_tokens that exceed this are skipped rather than sent.
@@ -420,12 +421,6 @@ class GoedelProverAgent:
             )
 
         messages = self._build_initial_messages(formal_statement)
-        gen_cfg = RawGenerationConfig(
-            max_tokens=self.cfg.max_tokens,
-            temperature=self.cfg.temperature,
-            top_p=self.cfg.top_p,
-            seed=seed,
-        )
 
         termination_reason = "max_rounds_exhausted"
         raw_output = ""
@@ -453,6 +448,7 @@ class GoedelProverAgent:
                 temperature=self.cfg.temperature,
                 top_p=self.cfg.top_p,
                 seed=seed + round_idx,
+                repeat_penalty=self.cfg.repeat_penalty,
             )
             raw_output = self._generate(prompt, backend, gen_cfg_round, stream_callback)
             round_record["raw_output"] = raw_output

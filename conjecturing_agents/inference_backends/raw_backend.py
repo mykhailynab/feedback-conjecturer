@@ -6,8 +6,8 @@ Both VLLMRawBackend and OllamaBackend implement RawBackend.
 Design contract
 ---------------
 - Agents are responsible for rendering their own prompt strings (e.g. via a
-  Jinja2 chat template).  Backends accept a pre-rendered ``str`` — they have
-  no knowledge of message formats.
+  chat template). Backends accept a pre-rendered ``str`` — they have no
+  knowledge of message formats.
 - ``count_tokens`` must be callable before ``generate`` to let callers enforce
   context budgets without relying on server-side rejection.
 - Streaming is available via ``generate_streaming``; it yields text chunks as
@@ -29,7 +29,7 @@ class RawGenerationConfig:
     temperature: float = 0.6
     top_p: float = 0.95
     seed: int = 0
-    # Repetition penalty — primarily for Ollama; ignored by vLLM unless set.
+    # Repetition penalty — primarily for Ollama; ignored by vLLM (for now)
     repeat_penalty: Optional[float] = None
 
 
@@ -79,7 +79,7 @@ class RawBackend(ABC):
     def close(self) -> None:
         """Release resources (server process, connections, …). Override as needed."""
 
-    def __enter__(self) -> "RawBackend":
+    def __enter__(self) -> RawBackend:
         return self
 
     def __exit__(self, *_) -> None:
