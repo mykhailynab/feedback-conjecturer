@@ -9,3 +9,4 @@ mpmath
 jinja2
 transformers
 ollama
+torch
