@@ -18,7 +18,7 @@ from jinja2 import Environment
 # ============================================================
 
 # build_initial_messages content after .strip()
-_INITIAL_USER_PROMPT = (
+INITIAL_USER_PROMPT = (
     "Complete the following Lean 4 code:\n\n"
     "```lean4\n"
     "{formal_statement}```\n\n"
@@ -29,7 +29,7 @@ _INITIAL_USER_PROMPT = (
 )
 
 # build_correction_messages user content
-_CORRECTION_USER_PROMPT = (
+CORRECTION_USER_PROMPT = (
     "The proof (Round {round_num}) is not correct. "
     "Following is the compilation error message, where we use "
     "<error></error> to signal the position of the error.\n\n"

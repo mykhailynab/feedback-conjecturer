@@ -21,8 +21,8 @@ from .lean_utils import (
     replace_statement_in_proof,
 )
 from .prompts import (
-    _CORRECTION_USER_PROMPT,
-    _INITIAL_USER_PROMPT,
+    CORRECTION_USER_PROMPT,
+    INITIAL_USER_PROMPT,
     render_with_template,
 )
 
@@ -57,7 +57,7 @@ class GoedelProverAgent:
     def _build_initial_messages(
         self, formal_statement: str
     ) -> List[Dict[str, str]]:
-        content = _INITIAL_USER_PROMPT.format(formal_statement=formal_statement)
+        content = INITIAL_USER_PROMPT.format(formal_statement=formal_statement)
         return [{"role": "user", "content": content}]
 
     def _build_correction_messages(
@@ -71,7 +71,7 @@ class GoedelProverAgent:
         msgs.append({"role": "assistant", "content": prev_assistant_output})
         msgs.append({
             "role": "user",
-            "content": _CORRECTION_USER_PROMPT.format(
+            "content": CORRECTION_USER_PROMPT.format(
                 round_num=failed_round_num,
                 error_feedback=error_feedback,
             ),

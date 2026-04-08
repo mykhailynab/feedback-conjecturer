@@ -45,6 +45,9 @@ class CheckFormalizationsConfig:
     goedel_vllm_model_name: str = "goedel"
     goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
 
+    # Logging / debug
+    print_agent_conv: bool = False
+
     # Orchestration
     parallelism: int = 4
     max_records: int = 0  # 0 = all
@@ -106,6 +109,7 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         goedel_vllm_base_url=cfg.goedel_vllm_base_url,
         goedel_vllm_model_name=cfg.goedel_vllm_model_name,
         goedel_tokenizer_path=cfg.goedel_tokenizer_path,
+        goedel_print_agent_conv=cfg.print_agent_conv,
     )
 
 
@@ -265,6 +269,13 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         default=CheckFormalizationsConfig.goedel_tokenizer_path,
         help="HF tokenizer path for exact token counting (required when --goedel is set).",
     )
+    p.add_argument(
+        "--print-agent-conv",
+        dest="print_agent_conv",
+        action="store_true",
+        default=CheckFormalizationsConfig.print_agent_conv,
+        help="Print Goedel prover prompts and generated tokens to stdout in real time.",
+    )
 
     # Orchestration
     p.add_argument(
@@ -333,6 +344,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         goedel_vllm_base_url=args.goedel_vllm_base_url,
         goedel_vllm_model_name=args.goedel_vllm_model_name,
         goedel_tokenizer_path=args.goedel_tokenizer_path,
+        print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,
         max_records=args.max_records,
         resume=args.resume,

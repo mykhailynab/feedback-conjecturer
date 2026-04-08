@@ -163,7 +163,7 @@ class VLLMRawBackend(RawBackend):
             "--kv-cache-dtype", self.cfg.kv_cache_dtype,
             "--max-model-len", str(self.cfg.context_tokens),
             "--stream-interval", str(self.cfg.stream_interval),
-            "--async-scheduling",
+            # "--async-scheduling",
             "--disable-log-stats",
         ]
         if self.cfg.enable_prefix_caching:
@@ -201,6 +201,14 @@ class VLLMRawBackend(RawBackend):
     # ------------------------------------------------------------------
 
     def generate(self, prompt: str, cfg: RawGenerationConfig) -> RawGenerationResult:
+        if self._verbose:
+            t0 = time.time()
+            chunks = list(self.generate_streaming(prompt, cfg))
+            return RawGenerationResult(
+                text="".join(chunks),
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
+
         if not self._started:
             self.start()
 
@@ -231,6 +239,9 @@ class VLLMRawBackend(RawBackend):
         if not self._started:
             self.start()
 
+        if self._verbose:
+            print(f"\n{'='*60}\n[PROMPT]\n{'='*60}\n{prompt}\n{'='*60}\n[GENERATION]\n{'='*60}", flush=True)
+
         stream = self.client.completions.create(
             model=self.cfg.served_model_name,
             prompt=prompt,
@@ -244,8 +255,12 @@ class VLLMRawBackend(RawBackend):
             for chunk in stream:
                 text = chunk.choices[0].text or ""
                 if text:
+                    if self._verbose:
+                        print(text, end="", flush=True)
                     yield text
         finally:
+            if self._verbose:
+                print(f"\n{'='*60}", flush=True)
             try:
                 stream.close()
             except Exception:

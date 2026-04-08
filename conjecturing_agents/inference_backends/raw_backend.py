@@ -56,6 +56,13 @@ class RawBackend(ABC):
       - ``OllamaBackend``   (ollama_backend.py)
     """
 
+    # Set to True via set_verbose() to print prompts and tokens to stdout.
+    _verbose: bool = False
+
+    def set_verbose(self, enabled: bool) -> None:
+        """Enable real-time prompt+token printing to stdout."""
+        self._verbose = enabled
+
     @abstractmethod
     def generate(
         self,

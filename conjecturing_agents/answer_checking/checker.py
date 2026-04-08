@@ -58,6 +58,9 @@ class AnswerCheckerConfig:
     # HF tokenizer path for exact token counting (required for either backend)
     goedel_tokenizer_path: str = ""
 
+    # Print prompts and generated tokens to stdout in real time
+    goedel_print_agent_conv: bool = False
+
 
 class AnswerChecker:
     """
@@ -145,6 +148,9 @@ class AnswerChecker:
                     host=self.cfg.goedel_ollama_host,
                     tokenizer_path=self.cfg.goedel_tokenizer_path,
                 ))
+
+            if self.cfg.goedel_print_agent_conv:
+                self._goedel_backend.set_verbose(True)
 
         return self._goedel_agent, self._goedel_backend
 

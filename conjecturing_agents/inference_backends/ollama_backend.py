@@ -103,6 +103,14 @@ class OllamaBackend(RawBackend):
     # ------------------------------------------------------------------
 
     def generate(self, prompt: str, cfg: RawGenerationConfig) -> RawGenerationResult:
+        if self._verbose:
+            t0 = time.time()
+            chunks = list(self.generate_streaming(prompt, cfg))
+            return RawGenerationResult(
+                text="".join(chunks),
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
+
         client = self._get_client()
         options = self._build_options(cfg)
 
@@ -113,7 +121,6 @@ class OllamaBackend(RawBackend):
             options=options,
             stream=False,
         )
-        print(list(resp.keys()))
         elapsed_ms = int((time.time() - t0) * 1000)
 
         text = resp.response
@@ -131,6 +138,9 @@ class OllamaBackend(RawBackend):
         client = self._get_client()
         options = self._build_options(cfg)
 
+        if self._verbose:
+            print(f"\n{'='*60}\n[PROMPT]\n{'='*60}\n{prompt}\n{'='*60}\n[GENERATION]\n{'='*60}", flush=True)
+
         for part in client.generate(
             model=self.cfg.model,
             prompt=prompt,
@@ -139,7 +149,12 @@ class OllamaBackend(RawBackend):
         ):
             chunk = part.response
             if chunk:
+                if self._verbose:
+                    print(chunk, end="", flush=True)
                 yield chunk
+
+        if self._verbose:
+            print(f"\n{'='*60}", flush=True)
 
     def close(self) -> None:
         self._client = None
