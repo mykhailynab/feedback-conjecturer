@@ -134,7 +134,7 @@ def format_lean_errors(
             if end_line > start_line + show_line:
                 last_j = min(end_line - 1, start_line + show_line - 1)
                 leading = len(code_lines[last_j]) - len(code_lines[last_j].lstrip(" "))
-                error_code += " " * leading + "... --[Truncated]-- ...\n"
+                error_code += "\n" + " " * leading + "... --[Truncated]-- ...\n"
             error_code += (
                 code_lines[end_line][:end_col]
                 + "</error>"
