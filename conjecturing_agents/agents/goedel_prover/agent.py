@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from conjecturing_agents.inference_backends.raw_backend import (
+    EventLoggerFn,
     RawBackend,
     RawGenerationConfig,
 )
@@ -116,6 +117,8 @@ class GoedelProverAgent:
         *,
         seed: int = 0,
         stream_callback: Optional[Callable[[str], None]] = None,
+        event_logger: Optional[EventLoggerFn] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> GoedelProverResult:
         """
         Attempt to prove ``theorem_statement`` using up to
@@ -126,7 +129,16 @@ class GoedelProverAgent:
             backend: A ``RawBackend`` instance (vLLM or Ollama).
             seed: Base seed; each round adds the round index.
             stream_callback: If provided, called with each streamed text chunk.
+            event_logger: Optional callable for structured event logging.
+            metadata: Extra key-value pairs merged into every logged event
+                (e.g. ``{"problem_id": 42, "attempt": 1}``).
         """
+        _meta = metadata or {}
+
+        def _log(event_type: str, payload: Dict[str, Any]) -> None:
+            if event_logger is not None:
+                event_logger(event_type, {**payload, **_meta})
+
         t0 = time.time()
         rounds: List[Dict[str, Any]] = []
 
@@ -144,12 +156,20 @@ class GoedelProverAgent:
                 rounds=[{"error": str(exc)}],
             )
 
+        _log("prover_session_start", {
+            "theorem_statement": theorem_statement,
+            "formal_statement": formal_statement,
+            "seed": seed,
+            "max_rounds": self.cfg.max_rounds,
+        })
+
         messages = self._build_initial_messages(formal_statement)
 
         termination_reason = "max_rounds_exhausted"
         raw_output = ""
         proof_text = ""
         full_code = ""
+        prompt = ""
 
         for round_idx in range(self.cfg.max_rounds + 1):
             round_record: Dict[str, Any] = {"round": round_idx}
@@ -158,11 +178,24 @@ class GoedelProverAgent:
             # --- Render + context budget check ---
             prompt = self._render_prompt(messages)
             prompt_tokens = backend.count_tokens(prompt)
+            round_record["prompt"] = prompt
             round_record["prompt_tokens"] = prompt_tokens
 
             if prompt_tokens + self.cfg.max_tokens > self.cfg.context_tokens:
                 round_record["termination_reason"] = "context_exceeded"
+                round_record["elapsed_ms"] = int((time.time() - round_t0) * 1000)
                 rounds.append(round_record)
+                _log("prover_round_done", {
+                    "round": round_idx,
+                    "prompt_text": prompt,
+                    "raw_output": "",
+                    "lean_ok": None,
+                    "lean_timed_out": None,
+                    "lean_oom": None,
+                    "lean_error_count": None,
+                    "elapsed_ms": round_record["elapsed_ms"],
+                    "termination_reason": "context_exceeded",
+                })
                 termination_reason = "context_exceeded"
                 break
 
@@ -183,6 +216,17 @@ class GoedelProverAgent:
                 round_record["termination_reason"] = "no_code_block"
                 round_record["elapsed_ms"] = int((time.time() - round_t0) * 1000)
                 rounds.append(round_record)
+                _log("prover_round_done", {
+                    "round": round_idx,
+                    "prompt_text": prompt,
+                    "raw_output": raw_output,
+                    "lean_ok": None,
+                    "lean_timed_out": None,
+                    "lean_oom": None,
+                    "lean_error_count": None,
+                    "elapsed_ms": round_record["elapsed_ms"],
+                    "termination_reason": "no_code_block",
+                })
                 if round_idx < self.cfg.max_rounds:
                     # No code to correct with; rebuild from scratch next round
                     messages = self._build_initial_messages(formal_statement)
@@ -201,6 +245,17 @@ class GoedelProverAgent:
                 round_record["termination_reason"] = "splice_error"
                 round_record["elapsed_ms"] = int((time.time() - round_t0) * 1000)
                 rounds.append(round_record)
+                _log("prover_round_done", {
+                    "round": round_idx,
+                    "prompt_text": prompt,
+                    "raw_output": raw_output,
+                    "lean_ok": None,
+                    "lean_timed_out": None,
+                    "lean_oom": None,
+                    "lean_error_count": None,
+                    "elapsed_ms": round_record["elapsed_ms"],
+                    "termination_reason": "splice_error",
+                })
                 termination_reason = "splice_error"
                 break
 
@@ -208,10 +263,24 @@ class GoedelProverAgent:
             compile_result = self.lean_backend.compile_code(full_code)
             round_record["lean_ok"] = compile_result.ok
             round_record["lean_timed_out"] = compile_result.timed_out
+            round_record["lean_oom"] = compile_result.oom
             round_record["lean_error_count"] = len(compile_result.json_errors)
             round_record["lean_relative_path"] = compile_result.relative_path
             round_record["elapsed_ms"] = int((time.time() - round_t0) * 1000)
             rounds.append(round_record)
+
+            _lean_reason = "proved" if compile_result.ok else "lean_failed"
+            _log("prover_round_done", {
+                "round": round_idx,
+                "prompt_text": prompt,
+                "raw_output": raw_output,
+                "lean_ok": compile_result.ok,
+                "lean_timed_out": compile_result.timed_out,
+                "lean_oom": compile_result.oom,
+                "lean_error_count": len(compile_result.json_errors),
+                "elapsed_ms": round_record["elapsed_ms"],
+                "termination_reason": _lean_reason,
+            })
 
             if compile_result.ok:
                 termination_reason = "proved"
@@ -232,6 +301,13 @@ class GoedelProverAgent:
                     failed_round_num=round_idx,
                 )
 
+        elapsed_ms = int((time.time() - t0) * 1000)
+        _log("prover_session_done", {
+            "proved": termination_reason == "proved",
+            "termination_reason": termination_reason,
+            "rounds_used": len(rounds),
+            "elapsed_ms": elapsed_ms,
+        })
         return GoedelProverResult(
             proved=(termination_reason == "proved"),
             termination_reason=termination_reason,
@@ -239,7 +315,7 @@ class GoedelProverAgent:
             proof_text=proof_text,
             full_code=full_code,
             rounds_used=len(rounds),
-            elapsed_ms=int((time.time() - t0) * 1000),
+            elapsed_ms=elapsed_ms,
             rounds=rounds,
         )
 

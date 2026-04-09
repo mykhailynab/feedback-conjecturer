@@ -7,11 +7,11 @@ because the Goedel fine-tune was trained on theorem statements.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from conjecturing_agents.agents.goedel_prover import GoedelProverAgent
 from conjecturing_agents.answer_checking.lean_equiv import extract_preamble
-from conjecturing_agents.inference_backends.raw_backend import RawBackend
+from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn, RawBackend
 
 from .result import CheckResult
 
@@ -51,6 +51,8 @@ def check_goedel_equiv(
     backend: RawBackend,
     *,
     seed: int = 0,
+    event_logger: Optional[EventLoggerFn] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> CheckResult:
     """
     Heuristic 3: use the Goedel prover to prove ``proposed = gt_rhs``.
@@ -68,7 +70,13 @@ def check_goedel_equiv(
         abbrev_name,
     )
 
-    result = agent.prove_theorem(theorem_stmt, backend, seed=seed)
+    result = agent.prove_theorem(
+        theorem_stmt,
+        backend,
+        seed=seed,
+        event_logger=event_logger,
+        metadata=metadata,
+    )
 
     details: Dict[str, Any] = {
         "termination_reason": result.termination_reason,

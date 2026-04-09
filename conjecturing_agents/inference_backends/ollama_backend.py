@@ -104,6 +104,7 @@ class OllamaBackend(RawBackend):
 
     def generate(self, prompt: str, cfg: RawGenerationConfig) -> RawGenerationResult:
         if self._verbose:
+            # generate_streaming handles event logging in this path
             t0 = time.time()
             chunks = list(self.generate_streaming(prompt, cfg))
             return RawGenerationResult(
@@ -114,6 +115,12 @@ class OllamaBackend(RawBackend):
         client = self._get_client()
         options = self._build_options(cfg)
 
+        self._log_event("raw_generation_start", {
+            "prompt_chars": len(prompt),
+            "max_tokens": cfg.max_tokens,
+            "temperature": cfg.temperature,
+            "seed": cfg.seed,
+        })
         t0 = time.time()
         resp = client.generate(
             model=self.cfg.model,
@@ -124,9 +131,16 @@ class OllamaBackend(RawBackend):
         elapsed_ms = int((time.time() - t0) * 1000)
 
         text = resp.response
-        prompt_tokens = len(resp.context) if resp.context is not None else None
-        generated_tokens = len(resp.logprobs) if resp.logprobs is not None else None
+        prompt_tokens = getattr(resp, "prompt_eval_count", None)
+        generated_tokens = getattr(resp, "eval_count", None)
 
+        self._log_event("raw_generation_done", {
+            "elapsed_ms": elapsed_ms,
+            "output_chars": len(text),
+            "prompt_tokens": prompt_tokens,
+            "generated_tokens": generated_tokens,
+            "timed_out": False,
+        })
         return RawGenerationResult(
             text=text,
             elapsed_ms=elapsed_ms,
@@ -138,9 +152,19 @@ class OllamaBackend(RawBackend):
         client = self._get_client()
         options = self._build_options(cfg)
 
+        self._log_event("raw_generation_start", {
+            "prompt_chars": len(prompt),
+            "max_tokens": cfg.max_tokens,
+            "temperature": cfg.temperature,
+            "seed": cfg.seed,
+        })
+        t0 = time.time()
+
         if self._verbose:
             print(f"\n{'='*60}\n[PROMPT]\n{'='*60}\n{prompt}\n{'='*60}\n[GENERATION]\n{'='*60}", flush=True)
 
+        first_chunk = True
+        output_chars = 0
         for part in client.generate(
             model=self.cfg.model,
             prompt=prompt,
@@ -149,10 +173,23 @@ class OllamaBackend(RawBackend):
         ):
             chunk = part.response
             if chunk:
+                if first_chunk:
+                    self._log_event("raw_generation_first_chunk", {
+                        "elapsed_ms": int((time.time() - t0) * 1000),
+                    })
+                    first_chunk = False
+                output_chars += len(chunk)
                 if self._verbose:
                     print(chunk, end="", flush=True)
                 yield chunk
 
+        self._log_event("raw_generation_done", {
+            "elapsed_ms": int((time.time() - t0) * 1000),
+            "output_chars": output_chars,
+            "prompt_tokens": None,
+            "generated_tokens": None,
+            "timed_out": False,
+        })
         if self._verbose:
             print(f"\n{'='*60}", flush=True)
 

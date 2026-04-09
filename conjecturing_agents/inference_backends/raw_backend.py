@@ -18,7 +18,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
+
+# Signature of an event-logger callable.  Implementations write one JSONL
+# record per call to wherever they are configured (e.g. goedel_events.jsonl).
+EventLoggerFn = Callable[[str, Dict[str, Any]], None]
 
 
 @dataclass
@@ -58,10 +62,19 @@ class RawBackend(ABC):
 
     # Set to True via set_verbose() to print prompts and tokens to stdout.
     _verbose: bool = False
+    _event_logger: Optional[EventLoggerFn] = None
 
     def set_verbose(self, enabled: bool) -> None:
         """Enable real-time prompt+token printing to stdout."""
         self._verbose = enabled
+
+    def set_event_logger(self, fn: EventLoggerFn) -> None:
+        """Register a callable that receives (event_type, payload) dicts."""
+        self._event_logger = fn
+
+    def _log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        if self._event_logger is not None:
+            self._event_logger(event_type, payload)
 
     @abstractmethod
     def generate(
@@ -94,6 +107,7 @@ class RawBackend(ABC):
 
 
 __all__ = [
+    "EventLoggerFn",
     "RawGenerationConfig",
     "RawGenerationResult",
     "RawBackend",

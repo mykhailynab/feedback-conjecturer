@@ -43,7 +43,7 @@ ELAN_ENV="/root/.elan/env"
 
 step "Installing apt packages"
 apt-get update -q || die "apt-get update failed"
-apt-get install -y screen curl git wget python3 python3-pip 2>&1 \
+apt-get install -y screen curl git wget python3 python3-pip lshw 2>&1 \
     | grep -v "^Get:\|^Fetched\|^Hit:\|^Ign:" \
     || die "apt-get install failed"
 
@@ -176,12 +176,16 @@ echo ""
 echo "  screen -dmS check_formalizations bash -c \\"
 echo "    'source $ELAN_ENV && \\"
 echo "     cd $PROJECT_DIR && \\"
-echo "     python -m conjecturing_agents.check_formalizations \\"
+echo "     export PYTHONPATH=. && \\"
+echo "     python conjecturing_agents/check_formalizations.py \\"
 echo "       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \\"
 echo "       --lean-project-dir $MATHLIB4_DIR \\"
 echo "       --parallelism 12 \\"
 echo "       --goedel \\"
 echo "       --continue 2>&1 | tee check_formalizations.log'"
+echo ""
+echo "For GPU monitoring:"
+echo "  screen -S gpu -dm watch -n 1 nvidia-smi"
 echo ""
 echo "To attach to the session:  screen -r check_formalizations"
 echo "Log file:                  $PROJECT_DIR/check_formalizations.log"

@@ -202,6 +202,7 @@ class VLLMRawBackend(RawBackend):
 
     def generate(self, prompt: str, cfg: RawGenerationConfig) -> RawGenerationResult:
         if self._verbose:
+            # generate_streaming handles event logging in this path
             t0 = time.time()
             chunks = list(self.generate_streaming(prompt, cfg))
             return RawGenerationResult(
@@ -212,6 +213,12 @@ class VLLMRawBackend(RawBackend):
         if not self._started:
             self.start()
 
+        self._log_event("raw_generation_start", {
+            "prompt_chars": len(prompt),
+            "max_tokens": cfg.max_tokens,
+            "temperature": cfg.temperature,
+            "seed": cfg.seed,
+        })
         t0 = time.time()
         resp = self.client.completions.create(
             model=self.cfg.served_model_name,
@@ -228,6 +235,13 @@ class VLLMRawBackend(RawBackend):
         prompt_tokens = usage.prompt_tokens if usage is not None else None
         generated_tokens = usage.completion_tokens if usage is not None else None
 
+        self._log_event("raw_generation_done", {
+            "elapsed_ms": elapsed_ms,
+            "output_chars": len(text),
+            "prompt_tokens": prompt_tokens,
+            "generated_tokens": generated_tokens,
+            "timed_out": False,
+        })
         return RawGenerationResult(
             text=text,
             elapsed_ms=elapsed_ms,
@@ -238,6 +252,14 @@ class VLLMRawBackend(RawBackend):
     def generate_streaming(self, prompt: str, cfg: RawGenerationConfig) -> Iterator[str]:
         if not self._started:
             self.start()
+
+        self._log_event("raw_generation_start", {
+            "prompt_chars": len(prompt),
+            "max_tokens": cfg.max_tokens,
+            "temperature": cfg.temperature,
+            "seed": cfg.seed,
+        })
+        t0 = time.time()
 
         if self._verbose:
             print(f"\n{'='*60}\n[PROMPT]\n{'='*60}\n{prompt}\n{'='*60}\n[GENERATION]\n{'='*60}", flush=True)
@@ -251,14 +273,29 @@ class VLLMRawBackend(RawBackend):
             seed=cfg.seed,
             stream=True,
         )
+        first_chunk = True
+        output_chars = 0
         try:
             for chunk in stream:
                 text = chunk.choices[0].text or ""
                 if text:
+                    if first_chunk:
+                        self._log_event("raw_generation_first_chunk", {
+                            "elapsed_ms": int((time.time() - t0) * 1000),
+                        })
+                        first_chunk = False
+                    output_chars += len(text)
                     if self._verbose:
                         print(text, end="", flush=True)
                     yield text
         finally:
+            self._log_event("raw_generation_done", {
+                "elapsed_ms": int((time.time() - t0) * 1000),
+                "output_chars": output_chars,
+                "prompt_tokens": None,
+                "generated_tokens": None,
+                "timed_out": False,
+            })
             if self._verbose:
                 print(f"\n{'='*60}", flush=True)
             try:

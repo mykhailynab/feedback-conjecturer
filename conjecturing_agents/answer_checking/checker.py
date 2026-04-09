@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from conjecturing_agents.agents.conjecture_formalizer import (
     extract_rhs_from_abbrev_declaration,
 )
+from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     Lean4CompilerBackend,
     LeanCompilerConfig,
@@ -88,8 +89,13 @@ class AnswerChecker:
     Stops as soon as any heuristic returns a conclusive result (equivalent != None).
     """
 
-    def __init__(self, cfg: Optional[AnswerCheckerConfig] = None):
+    def __init__(
+        self,
+        cfg: Optional[AnswerCheckerConfig] = None,
+        event_logger: Optional[EventLoggerFn] = None,
+    ):
         self.cfg = cfg or AnswerCheckerConfig()
+        self._event_logger = event_logger
         self._compiler: Optional[Lean4CompilerBackend] = None
         self._goedel_agent = None
         self._goedel_backend = None
@@ -182,6 +188,8 @@ class AnswerChecker:
 
             if self.cfg.goedel_print_agent_conv:
                 self._goedel_backend.set_verbose(True)
+            if self._event_logger is not None:
+                self._goedel_backend.set_event_logger(self._event_logger)
 
         return self._goedel_agent, self._goedel_backend
 
@@ -260,6 +268,8 @@ class AnswerChecker:
                 agent,
                 backend,
                 seed=seed,
+                event_logger=self._event_logger,
+                metadata={"problem_id": problem_id, "attempt": attempt},
             )
             all_results.append(r3)
             if r3.equivalent is not None:

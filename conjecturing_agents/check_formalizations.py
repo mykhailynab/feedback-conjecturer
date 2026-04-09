@@ -37,6 +37,7 @@ from conjecturing_agents.check_formalizations.config import (
     make_checker_config,
     parse_args_and_validate,
 )
+from conjecturing_agents.check_formalizations.logging import CheckFormalizationsLogger
 
 
 def check_record(checker: AnswerChecker, record: Dict[str, Any]) -> Dict[str, Any]:
@@ -66,6 +67,9 @@ def main() -> None:
     )
 
     checker_cfg = make_checker_config(cfg)
+
+    events_path = str(Path(output_path).parent / "goedel_events.jsonl")
+    event_logger = CheckFormalizationsLogger(events_path) if checker_cfg.use_goedel_prover else None
 
     decided_results: List[Dict[str, Any]] = []
     records_to_check = records
@@ -97,7 +101,10 @@ def main() -> None:
     write_lock = threading.Lock()
 
     def make_checker() -> AnswerChecker:
-        return AnswerChecker(checker_cfg)
+        return AnswerChecker(
+            checker_cfg,
+            event_logger=event_logger.log_event if event_logger is not None else None,
+        )
 
     # Summary counters (decided records already counted in)
     equiv_counts: Dict[Optional[bool], int] = defaultdict(int)
@@ -209,6 +216,9 @@ def main() -> None:
     if lean_timed_out or lean_oom:
         print(f"  lean_equiv timed out: {lean_timed_out}, OOM: {lean_oom}")
     print(f"\nWrote {len(all_results)} records to {output_path}")
+    if event_logger is not None:
+        event_logger.close()
+        print(f"Event log: {events_path}")
 
 
 if __name__ == "__main__":
