@@ -15,6 +15,7 @@ from conjecturing_agents.tool_calling_backends.lean4_compiler import (
 from .result import CheckResult
 from .string_match import check_string_match
 from .lean_equiv import check_lean_equiv
+from .goedel_equiv import check_goedel_equiv
 
 
 @dataclass
@@ -255,7 +256,6 @@ class AnswerChecker:
 
         # --- Heuristic 3: Goedel-prover ---
         if self.cfg.use_goedel_prover and lean_statement:
-            from .goedel_equiv import check_goedel_equiv
             agent, backend = self._get_goedel()
             problem_id = record.get("problem_id") or 0
             attempt = record.get("attempt") or 0
