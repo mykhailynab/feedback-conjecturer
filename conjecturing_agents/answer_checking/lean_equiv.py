@@ -25,6 +25,10 @@ _TACTIC_BLOCKS = [
     "simp only [{name}]\n  decide",
     # combined: unfold + simp lemmas + norm_num
     "simp only [{name}]\n  simp\n  norm_num",
+    # norm_cast normalises numeric coercions before norm_num
+    "simp only [{name}]\n  norm_cast\n  norm_num",
+    # push_cast pushes coercions inward before norm_num
+    "simp only [{name}]\n  push_cast\n  norm_num",
     # native_decide for computationally decidable goals
     "simp only [{name}]\n  native_decide",
 ]
