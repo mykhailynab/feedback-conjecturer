@@ -28,6 +28,7 @@ class CheckFormalizationsConfig:
     use_string_match: bool = True
     use_lean_equiv: bool = True
     use_goedel_prover: bool = False
+    use_goedel_disprover: bool = False
 
     # Goedel prover settings
     goedel_chat_template_path: str = "goedel_template.jinja"
@@ -110,6 +111,7 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         use_string_match=cfg.use_string_match,
         use_lean_equiv=cfg.use_lean_equiv,
         use_goedel_prover=cfg.use_goedel_prover,
+        use_goedel_disprover=cfg.use_goedel_disprover,
         goedel_chat_template_path=cfg.goedel_chat_template_path,
         goedel_max_rounds=cfg.goedel_max_rounds,
         goedel_max_tokens=cfg.goedel_max_tokens,
@@ -225,6 +227,16 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         action="store_true",
         default=CheckFormalizationsConfig.use_goedel_prover,
         help="Enable Goedel-prover equivalence check (heuristic 3).",
+    )
+    p.add_argument(
+        "--goedel-disprover",
+        dest="use_goedel_disprover",
+        action="store_true",
+        default=CheckFormalizationsConfig.use_goedel_disprover,
+        help=(
+            "After a failed Goedel proof, attempt to disprove equivalence (heuristic 4). "
+            "Requires --goedel. A successful disproof yields equivalent=False."
+        ),
     )
     p.add_argument(
         "--goedel-chat-template-path",
@@ -415,7 +427,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         default=CheckFormalizationsConfig.resume,
         help=(
             "Resume from an existing output file. Already-decided records "
-            "(equivalent is not None) are kept as-is; undecided records "
+            "(equivalent=True or equivalent=False) are kept as-is; undecided records "
             "(equivalent=None) are re-checked."
         ),
     )
@@ -447,6 +459,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         use_string_match=args.use_string_match,
         use_lean_equiv=args.use_lean_equiv,
         use_goedel_prover=args.use_goedel_prover,
+        use_goedel_disprover=args.use_goedel_disprover,
         goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,
         goedel_max_tokens=args.goedel_max_tokens,

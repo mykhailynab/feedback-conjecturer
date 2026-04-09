@@ -69,7 +69,11 @@ def main() -> None:
     checker_cfg = make_checker_config(cfg)
 
     events_path = str(Path(output_path).parent / "goedel_events.jsonl")
-    event_logger = CheckFormalizationsLogger(events_path) if checker_cfg.use_goedel_prover else None
+    event_logger = (
+        CheckFormalizationsLogger(events_path)
+        if (checker_cfg.use_goedel_prover or checker_cfg.use_goedel_disprover)
+        else None
+    )
 
     decided_results: List[Dict[str, Any]] = []
     records_to_check = records
@@ -204,11 +208,13 @@ def main() -> None:
     all_results = decided_results + all_new_results
     success_records = [r for r in all_results if r.get("status") == "success"]
     equiv_true = sum(1 for r in success_records if r.get("equivalent") is True)
+    equiv_false = sum(1 for r in success_records if r.get("equivalent") is False)
     inconclusive = sum(1 for r in success_records if r.get("equivalent") is None)
     total_success = len(success_records)
 
     print(f"\nResults ({total_success} success records):")
     print(f"  equivalent=True : {equiv_true} ({100*equiv_true/max(total_success,1):.1f}%)")
+    print(f"  equivalent=False: {equiv_false} ({100*equiv_false/max(total_success,1):.1f}%)")
     print(f"  inconclusive    : {inconclusive} ({100*inconclusive/max(total_success,1):.1f}%)")
     print(f"  by method: {dict(by_method)}")
     if by_error_details:

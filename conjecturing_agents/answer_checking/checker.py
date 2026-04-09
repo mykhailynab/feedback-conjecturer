@@ -15,7 +15,7 @@ from conjecturing_agents.tool_calling_backends.lean4_compiler import (
 from .result import CheckResult
 from .string_match import check_string_match
 from .lean_equiv import check_lean_equiv
-from .goedel_equiv import check_goedel_equiv
+from .goedel_equiv import check_goedel_equiv, check_goedel_inequiv
 
 
 @dataclass
@@ -33,6 +33,8 @@ class AnswerCheckerConfig:
     use_string_match: bool = True
     use_lean_equiv: bool = True
     use_goedel_prover: bool = False
+    # Run a Goedel disproof attempt after a failed proof (requires use_goedel_prover=True)
+    use_goedel_disprover: bool = False
 
     # ------------------------------------------------------------------ #
     # Goedel prover (heuristic 3)
@@ -85,9 +87,12 @@ class AnswerChecker:
 
       1. String match (fast, no Lean needed)
       2. Lean equivalence proof via canned tactics
-      3. Goedel-prover proof attempt
+      3. Goedel-prover proof attempt (equivalent=True if proved)
+      4. Goedel-prover disproof attempt (equivalent=False if disproved)
 
     Stops as soon as any heuristic returns a conclusive result (equivalent != None).
+    Heuristic 4 only runs when use_goedel_disprover=True and heuristic 3 was
+    inconclusive.
     """
 
     def __init__(
@@ -254,7 +259,7 @@ class AnswerChecker:
             if r2.equivalent is not None:
                 return self._format_output(r2, all_results)
 
-        # --- Heuristic 3: Goedel-prover ---
+        # --- Heuristic 3: Goedel-prover proof attempt ---
         if self.cfg.use_goedel_prover and lean_statement:
             agent, backend = self._get_goedel()
             problem_id = record.get("problem_id") or 0
@@ -269,11 +274,28 @@ class AnswerChecker:
                 backend,
                 seed=seed,
                 event_logger=self._event_logger,
-                metadata={"problem_id": problem_id, "attempt": attempt},
+                metadata={"problem_id": problem_id, "attempt": attempt, "checking": "proof"},
             )
             all_results.append(r3)
             if r3.equivalent is not None:
                 return self._format_output(r3, all_results)
+
+            # --- Heuristic 4: Goedel-prover disproof attempt ---
+            if self.cfg.use_goedel_disprover:
+                r4 = check_goedel_inequiv(
+                    lean_statement,
+                    proposed_decl,
+                    gt_rhs,
+                    abbrev_name,
+                    agent,
+                    backend,
+                    seed=seed,
+                    event_logger=self._event_logger,
+                    metadata={"problem_id": problem_id, "attempt": attempt, "checking": "disproof"},
+                )
+                all_results.append(r4)
+                if r4.equivalent is not None:
+                    return self._format_output(r4, all_results)
 
         inconclusive = CheckResult(equivalent=None, method="inconclusive", details={})
         return self._format_output(inconclusive, all_results)
