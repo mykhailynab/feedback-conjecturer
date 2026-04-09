@@ -98,6 +98,8 @@ if [[ ! -d "$MATHLIB4_DIR" ]]; then
 fi
 
 echo "Running lake build (downloads precompiled cache; may take 10–20 min on first run)..."
+# TODO: check if mathlib4.tar.gz exists in the current folder (we may have scp'd it onto the machine)
+# If yes, we should just unpack tar.gz, if not, then run lake build (and create tar.gz afterwards)
 pushd "$MATHLIB4_DIR" > /dev/null
 lake build || die "lake build failed"
 popd > /dev/null
@@ -182,7 +184,10 @@ echo "       --formalizations-path logs/conjecture_formalization_logs_20mins/for
 echo "       --lean-project-dir $MATHLIB4_DIR \\"
 echo "       --parallelism 12 \\"
 echo "       --goedel \\"
-echo "       --continue 2>&1 | tee check_formalizations.log'"
+echo "       --continue &> check_formalizations.log'"
+echo ""
+echo "For script monitoring:"
+echo "  screen -dmS monitor_check_formalizations tail -f check_formalizations.log"
 echo ""
 echo "For GPU monitoring:"
 echo "  screen -S gpu -dm watch -n 1 nvidia-smi"

@@ -30,6 +30,19 @@ find \
     \) \
 | zip "$OUTPUT" -@
 
+rm -f conjecturing_agents.zip
+
+find \
+    conjecturing_agents \
+    \( -name "__pycache__" -prune \) \
+    -o \( \
+        -type f \
+        -not -name "*.pyc" \
+        -not -name ".DS_Store" \
+        -print \
+    \) \
+| zip conjecturing_agents.zip -@
+
 # Individual root-level files
 zip "$OUTPUT" \
     requirements.txt \
@@ -41,7 +54,3 @@ SIZE=$(du -sh "$OUTPUT" | cut -f1)
 COUNT=$(unzip -l "$OUTPUT" | tail -1 | awk '{print $2}')
 echo ""
 echo "Created: $OUTPUT  ($SIZE, $COUNT files)"
-echo ""
-echo "Transfer to remote:"
-echo "  scp $OUTPUT user@host:~/"
-echo "  ssh user@host 'unzip goedel_check_package.zip -d code && bash code/setup_remote.sh'"
