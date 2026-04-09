@@ -11,3 +11,4 @@ transformers
 ollama
 torch
 pytest
+vllm
