@@ -42,15 +42,16 @@ class CheckFormalizationsConfig:
     goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
     goedel_ollama_model: str = "goedel-v2:latest"
     goedel_ollama_host: str = "http://localhost:11434"
+    goedel_ollama_client_timeout: int = 1200
     goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
     goedel_vllm_model_name: str = "goedel"
     goedel_vllm_api_key: str = "sk-local"
-    goedel_vllm_client_timeout: int = 240
+    goedel_vllm_client_timeout: int = 1200
     goedel_vllm_manage_server: bool = False
     goedel_vllm_model_path: str = ""
     goedel_vllm_port: int = 8001
     goedel_vllm_host: str = "0.0.0.0"
-    goedel_vllm_server_timeout: int = 240
+    goedel_vllm_server_timeout: int = 1200
     goedel_vllm_server_log_path: str = "vllm_goedel_server.log"
     goedel_vllm_dtype: str = "bfloat16"
     goedel_vllm_kv_cache_dtype: str = "fp8_e4m3"
@@ -123,6 +124,7 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         goedel_backend_type=cfg.goedel_backend_type,
         goedel_ollama_model=cfg.goedel_ollama_model,
         goedel_ollama_host=cfg.goedel_ollama_host,
+        goedel_ollama_client_timeout=cfg.goedel_ollama_client_timeout,
         goedel_vllm_base_url=cfg.goedel_vllm_base_url,
         goedel_vllm_model_name=cfg.goedel_vllm_model_name,
         goedel_vllm_api_key=cfg.goedel_vllm_api_key,
@@ -295,6 +297,12 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         "--goedel-ollama-host",
         default=CheckFormalizationsConfig.goedel_ollama_host,
         help="Ollama server URL (backend=ollama).",
+    )
+    p.add_argument(
+        "--goedel-ollama-client-timeout",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_ollama_client_timeout,
+        help="HTTP client timeout in seconds for Ollama requests (backend=ollama).",
     )
     p.add_argument(
         "--goedel-vllm-base-url",
@@ -470,6 +478,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         goedel_backend_type=args.goedel_backend_type,
         goedel_ollama_model=args.goedel_ollama_model,
         goedel_ollama_host=args.goedel_ollama_host,
+        goedel_ollama_client_timeout=args.goedel_ollama_client_timeout,
         goedel_vllm_base_url=args.goedel_vllm_base_url,
         goedel_vllm_model_name=args.goedel_vllm_model_name,
         goedel_vllm_api_key=args.goedel_vllm_api_key,

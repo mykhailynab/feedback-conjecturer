@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -54,6 +55,7 @@ class AnswerCheckerConfig:
     # Ollama backend
     goedel_ollama_model: str = "goedel-v2"
     goedel_ollama_host: str = "http://localhost:11434"
+    goedel_ollama_client_timeout: int = 240
 
     # vLLM backend (used when goedel_backend_type="vllm")
     goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
@@ -189,6 +191,7 @@ class AnswerChecker:
                 self._goedel_backend = OllamaBackend(OllamaConfig(
                     model=self.cfg.goedel_ollama_model,
                     host=self.cfg.goedel_ollama_host,
+                    client_timeout=self.cfg.goedel_ollama_client_timeout,
                     tokenizer_path=self.cfg.goedel_tokenizer_path,
                 ))
 
@@ -238,25 +241,36 @@ class AnswerChecker:
         proposed_rhs = extract_rhs_from_abbrev_declaration(proposed_decl)
         all_results: list[CheckResult] = []
 
+        def _try(method_name: str, fn: Callable[[], CheckResult]) -> Optional[CheckResult]:
+            """Run fn(), appending the result or an error record to all_results."""
+            try:
+                r = fn()
+                all_results.append(r)
+                return r
+            except Exception as exc:
+                all_results.append(CheckResult(
+                    equivalent=None,
+                    method=method_name,
+                    details={
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(),
+                    },
+                ))
+                return None
+
         # --- Heuristic 1: string match ---
         if self.cfg.use_string_match:
-            r1 = check_string_match(proposed_rhs, gt_rhs)
-            all_results.append(r1)
-            if r1.equivalent is not None:
+            r1 = _try("string_match", lambda: check_string_match(proposed_rhs, gt_rhs))
+            if r1 is not None and r1.equivalent is not None:
                 return self._format_output(r1, all_results)
 
         # --- Heuristic 2: Lean equivalence proof via canned tactics ---
         if self.cfg.use_lean_equiv and lean_statement:
             compiler = self._get_compiler()
-            r2 = check_lean_equiv(
-                lean_statement,
-                proposed_decl,
-                gt_rhs,
-                abbrev_name,
-                compiler,
-            )
-            all_results.append(r2)
-            if r2.equivalent is not None:
+            r2 = _try("lean_equiv", lambda: check_lean_equiv(
+                lean_statement, proposed_decl, gt_rhs, abbrev_name, compiler,
+            ))
+            if r2 is not None and r2.equivalent is not None:
                 return self._format_output(r2, all_results)
 
         # --- Heuristic 3: Goedel-prover proof attempt ---
@@ -265,36 +279,24 @@ class AnswerChecker:
             problem_id = record.get("problem_id") or 0
             attempt = record.get("attempt") or 0
             seed = hash((problem_id, attempt, abbrev_name)) & 0x7FFFFFFF
-            r3 = check_goedel_equiv(
-                lean_statement,
-                proposed_decl,
-                gt_rhs,
-                abbrev_name,
-                agent,
-                backend,
+            r3 = _try("goedel_prover", lambda: check_goedel_equiv(
+                lean_statement, proposed_decl, gt_rhs, abbrev_name, agent, backend,
                 seed=seed,
                 event_logger=self._event_logger,
                 metadata={"problem_id": problem_id, "attempt": attempt, "checking": "proof"},
-            )
-            all_results.append(r3)
-            if r3.equivalent is not None:
+            ))
+            if r3 is not None and r3.equivalent is not None:
                 return self._format_output(r3, all_results)
 
             # --- Heuristic 4: Goedel-prover disproof attempt ---
             if self.cfg.use_goedel_disprover:
-                r4 = check_goedel_inequiv(
-                    lean_statement,
-                    proposed_decl,
-                    gt_rhs,
-                    abbrev_name,
-                    agent,
-                    backend,
+                r4 = _try("goedel_disprover", lambda: check_goedel_inequiv(
+                    lean_statement, proposed_decl, gt_rhs, abbrev_name, agent, backend,
                     seed=seed,
                     event_logger=self._event_logger,
                     metadata={"problem_id": problem_id, "attempt": attempt, "checking": "disproof"},
-                )
-                all_results.append(r4)
-                if r4.equivalent is not None:
+                ))
+                if r4 is not None and r4.equivalent is not None:
                     return self._format_output(r4, all_results)
 
         inconclusive = CheckResult(equivalent=None, method="inconclusive", details={})
