@@ -188,7 +188,7 @@ if pgrep -x ollama &>/dev/null; then
     echo "Ollama server already running"
 else
     echo "Launching ollama serve..."
-    nohup ollama serve > /var/log/ollama.log 2>&1 &
+    nohup env OLLAMA_NUM_PARALLEL=1 ollama serve > /var/log/ollama.log 2>&1 &   
     echo "Waiting for Ollama to become ready..."
     for i in $(seq 1 30); do
         if ollama list &>/dev/null 2>&1; then
@@ -245,7 +245,7 @@ echo "     export PYTHONPATH=. && \\"
 echo "     python conjecturing_agents/check_formalizations.py \\"
 echo "       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \\"
 echo "       --lean-project-dir $MATHLIB4_DIR \\"
-echo "       --parallelism 4 \\"
+echo "       --parallelism 1 \\"
 echo "       --goedel --goedel-disprover \\"
 echo "       --goedel-proof-retries 1 \\"
 echo "       --goedel-disproof-retries 1 \\"
@@ -253,9 +253,25 @@ echo "       --continue &> check_formalizations.log'"
 echo ""
 echo "For script monitoring:"
 echo "  screen -dmS monitor_check_formalizations tail -f check_formalizations.log"
+echo "For ollama monitoring:"
+echo "  screen -dmS ollama_mon tail -f /var/log/ollama.log"
 echo ""
 echo "For GPU monitoring:"
 echo "  screen -S gpu -dm watch -n 1 nvidia-smi"
 echo ""
 echo "To attach to the session:  screen -r check_formalizations"
 echo "Log file:                  $PROJECT_DIR/check_formalizations.log"
+
+# Example output:
+# screen -dmS check_formalizations bash -c \
+#     'source /root/.elan/env && \
+#      cd /workspace && \
+#      export PYTHONPATH=. && \
+#      python conjecturing_agents/check_formalizations.py \
+#        --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+#        --lean-project-dir /workspace/mathlib4 \
+#        --parallelism 1 \
+#        --goedel --goedel-disprover \
+#        --goedel-proof-retries 1 \
+#        --goedel-disproof-retries 1 \
+#        --continue &> check_formalizations.log'
