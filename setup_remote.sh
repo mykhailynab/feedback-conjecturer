@@ -288,7 +288,7 @@ echo "Log file:                  $PROJECT_DIR/check_formalizations.log"
 #      cd /workspace && \
 #      export PYTHONPATH=. && \
 #      python conjecturing_agents/check_formalizations.py \
-#        --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+#        --formalizations-path logs/conjecture_equivalence_goedel_pass1/formalizations.jsonl \
 #        --lean-project-dir /workspace/mathlib4 \
 #        --parallelism 6 \
 #        --goedel --goedel-disprover \
