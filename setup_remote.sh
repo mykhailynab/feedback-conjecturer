@@ -85,7 +85,7 @@ download_mathlib4() {
         echo "already present" > "$MATHLIB4_LOG"
         return 0
     fi
-    gdown "https://drive.google.com/uc?id=$MATHLIB4_GDRIVE_ID" \
+    gdown "$MATHLIB4_GDRIVE_ID" \
         -O "$MATHLIB4_TARBALL" --no-bar \
         >> "$MATHLIB4_LOG" 2>&1 \
         || { rm -f "$MATHLIB4_TARBALL"; echo "FAILED" >> "$MATHLIB4_LOG"; return 1; }
