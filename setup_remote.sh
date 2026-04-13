@@ -91,15 +91,22 @@ fi
 # shellcheck source=/dev/null
 source "$ELAN_ENV"
 
+MATHLIB4_TARBALL="$PROJECT_DIR/mathlib4.tar.gz"
+
 if [[ ! -d "$MATHLIB4_DIR" ]]; then
-    echo "Cloning mathlib4..."
-    git clone https://github.com/xinhjBrant/mathlib4.git "$MATHLIB4_DIR" \
-        || die "Failed to clone mathlib4"
+    if [[ -f "$MATHLIB4_TARBALL" ]]; then
+        echo "Found mathlib4.tar.gz — unpacking..."
+        tar -xzf "$MATHLIB4_TARBALL" -C "$PROJECT_DIR" \
+            || die "Failed to unpack $MATHLIB4_TARBALL"
+        echo "Unpacked to $MATHLIB4_DIR"
+    else
+        echo "Cloning mathlib4..."
+        git clone https://github.com/xinhjBrant/mathlib4.git "$MATHLIB4_DIR" \
+            || die "Failed to clone mathlib4"
+    fi
 fi
 
-echo "Running lake build (downloads precompiled cache; may take 10–20 min on first run)..."
-# TODO: check if mathlib4.tar.gz exists in the current folder (we may have scp'd it onto the machine)
-# If yes, we should just unpack tar.gz, if not, then run lake build (and create tar.gz afterwards)
+echo "Running lake build..."
 pushd "$MATHLIB4_DIR" > /dev/null
 lake build || die "lake build failed"
 popd > /dev/null
@@ -184,6 +191,8 @@ echo "       --formalizations-path logs/conjecture_formalization_logs_20mins/for
 echo "       --lean-project-dir $MATHLIB4_DIR \\"
 echo "       --parallelism 4 \\"
 echo "       --goedel --goedel-disprover \\"
+echo "       --goedel-proof-retries 1 \\"
+echo "       --goedel-disproof-retries 1 \\"
 echo "       --continue &> check_formalizations.log'"
 echo ""
 echo "For script monitoring:"

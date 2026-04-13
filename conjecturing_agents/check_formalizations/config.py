@@ -29,6 +29,8 @@ class CheckFormalizationsConfig:
     use_lean_equiv: bool = True
     use_goedel_prover: bool = False
     use_goedel_disprover: bool = False
+    goedel_proof_retries: int = 1
+    goedel_disproof_retries: int = 1
 
     # Goedel prover settings
     goedel_chat_template_path: str = "goedel_template.jinja"
@@ -113,6 +115,8 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         use_lean_equiv=cfg.use_lean_equiv,
         use_goedel_prover=cfg.use_goedel_prover,
         use_goedel_disprover=cfg.use_goedel_disprover,
+        goedel_proof_retries=cfg.goedel_proof_retries,
+        goedel_disproof_retries=cfg.goedel_disproof_retries,
         goedel_chat_template_path=cfg.goedel_chat_template_path,
         goedel_max_rounds=cfg.goedel_max_rounds,
         goedel_max_tokens=cfg.goedel_max_tokens,
@@ -238,6 +242,24 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         help=(
             "After a failed Goedel proof, attempt to disprove equivalence (heuristic 4). "
             "Requires --goedel. A successful disproof yields equivalent=False."
+        ),
+    )
+    p.add_argument(
+        "--goedel-proof-retries",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_proof_retries,
+        help=(
+            "Number of independent proof attempts before giving up (pass@N). "
+            "Each retry uses a different seed. Default: 1."
+        ),
+    )
+    p.add_argument(
+        "--goedel-disproof-retries",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_disproof_retries,
+        help=(
+            "Number of independent disproof attempts before giving up (pass@N). "
+            "Each retry uses a different seed. Requires --goedel-disprover. Default: 1."
         ),
     )
     p.add_argument(
@@ -468,6 +490,8 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         use_lean_equiv=args.use_lean_equiv,
         use_goedel_prover=args.use_goedel_prover,
         use_goedel_disprover=args.use_goedel_disprover,
+        goedel_proof_retries=args.goedel_proof_retries,
+        goedel_disproof_retries=args.goedel_disproof_retries,
         goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,
         goedel_max_tokens=args.goedel_max_tokens,

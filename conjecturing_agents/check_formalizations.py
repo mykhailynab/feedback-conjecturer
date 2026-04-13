@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import traceback
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -191,7 +192,11 @@ def main() -> None:
                         "check_result": {
                             "equivalent": None,
                             "method": "error",
-                            "details": {"error": str(exc)},
+                            "details": {
+                                "error": str(exc),
+                                "traceback": traceback.format_exc(),
+                                "type": "terminating",  # indicate that heuristics were interrupted
+                            },
                         },
                         "all_results": [],
                     }

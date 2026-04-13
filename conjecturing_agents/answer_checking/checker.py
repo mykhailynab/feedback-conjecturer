@@ -37,6 +37,11 @@ class AnswerCheckerConfig:
     # Run a Goedel disproof attempt after a failed proof (requires use_goedel_prover=True)
     use_goedel_disprover: bool = False
 
+    # Number of independent proof/disproof attempts before giving up (pass@N).
+    # Each retry uses a different seed. 1 = try once (default, pass@1).
+    goedel_proof_retries: int = 1
+    goedel_disproof_retries: int = 1
+
     # ------------------------------------------------------------------ #
     # Goedel prover (heuristic 3)
     # ------------------------------------------------------------------ #
@@ -273,31 +278,41 @@ class AnswerChecker:
             if r2 is not None and r2.equivalent is not None:
                 return self._format_output(r2, all_results)
 
-        # --- Heuristic 3: Goedel-prover proof attempt ---
+        # --- Heuristics 3 & 4: Goedel-prover proof / disproof ---
         if self.cfg.use_goedel_prover and lean_statement:
             agent, backend = self._get_goedel()
             problem_id = record.get("problem_id") or 0
             attempt = record.get("attempt") or 0
-            seed = hash((problem_id, attempt, abbrev_name)) & 0x7FFFFFFF
-            r3 = _try("goedel_prover", lambda: check_goedel_equiv(
-                lean_statement, proposed_decl, gt_rhs, abbrev_name, agent, backend,
-                seed=seed,
-                event_logger=self._event_logger,
-                metadata={"problem_id": problem_id, "attempt": attempt, "checking": "proof"},
-            ))
-            if r3 is not None and r3.equivalent is not None:
-                return self._format_output(r3, all_results)
+            base_seed = hash((problem_id, attempt, abbrev_name)) & 0x7FFFFFFF
 
-            # --- Heuristic 4: Goedel-prover disproof attempt ---
-            if self.cfg.use_goedel_disprover:
-                r4 = _try("goedel_disprover", lambda: check_goedel_inequiv(
+            for retry in range(self.cfg.goedel_proof_retries):
+                seed = (base_seed + retry) & 0x7FFFFFFF
+                r3 = _try("goedel_prover", lambda s=seed: check_goedel_equiv(
                     lean_statement, proposed_decl, gt_rhs, abbrev_name, agent, backend,
-                    seed=seed,
+                    seed=s,
                     event_logger=self._event_logger,
-                    metadata={"problem_id": problem_id, "attempt": attempt, "checking": "disproof"},
+                    metadata={
+                        "problem_id": problem_id, "attempt": attempt,
+                        "checking": "proof", "retry": retry
+                    },
                 ))
-                if r4 is not None and r4.equivalent is not None:
-                    return self._format_output(r4, all_results)
+                if r3 is not None and r3.equivalent is not None:
+                    return self._format_output(r3, all_results)
+
+            if self.cfg.use_goedel_disprover:
+                for retry in range(self.cfg.goedel_disproof_retries):
+                    seed = (base_seed + retry) & 0x7FFFFFFF
+                    r4 = _try("goedel_disprover", lambda s=seed: check_goedel_inequiv(
+                        lean_statement, proposed_decl, gt_rhs, abbrev_name, agent, backend,
+                        seed=s,
+                        event_logger=self._event_logger,
+                        metadata={
+                            "problem_id": problem_id, "attempt": attempt,
+                            "checking": "disproof", "retry": retry
+                        },
+                    ))
+                    if r4 is not None and r4.equivalent is not None:
+                        return self._format_output(r4, all_results)
 
         inconclusive = CheckResult(equivalent=None, method="inconclusive", details={})
         return self._format_output(inconclusive, all_results)
