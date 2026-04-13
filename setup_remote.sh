@@ -33,6 +33,8 @@ MODELS_DIR="$PROJECT_DIR/models"
 GGUF_FILENAME="Goedel-Prover-V2-32B.Q8_0.gguf"
 GGUF_PATH="$MODELS_DIR/$GGUF_FILENAME"
 GGUF_URL="https://huggingface.co/mradermacher/Goedel-Prover-V2-32B-GGUF/resolve/main/$GGUF_FILENAME"
+MATHLIB4_TARBALL="$PROJECT_DIR/mathlib4.tar.gz"
+MATHLIB4_GDRIVE_ID="1_0QVdYxrsaibi-eCqBrdLWnscpUbpLhA"
 OLLAMA_MODEL_NAME="goedel-v2"   # matches AnswerCheckerConfig.goedel_ollama_model default
 MODELFILE_PATH="$PROJECT_DIR/Modelfile"
 ELAN_ENV="/root/.elan/env"
@@ -58,19 +60,75 @@ pip install -r "$PROJECT_DIR/requirements.txt" \
     || die "pip install -r requirements.txt failed"
 
 # ============================================================
-# 3. Download GGUF model (~34 GB)
+# 3. Parallel downloads: GGUF model (~34 GB) + mathlib4 cache
 # ============================================================
 
-step "Downloading GGUF model"
+step "Starting parallel downloads"
 mkdir -p "$MODELS_DIR"
-if [[ -f "$GGUF_PATH" ]]; then
-    echo "Already downloaded: $GGUF_PATH"
-else
-    echo "Downloading $GGUF_FILENAME from HuggingFace — this will take a while..."
-    wget --continue --show-progress -O "$GGUF_PATH" "$GGUF_URL" \
-        || { rm -f "$GGUF_PATH"; die "Download failed: $GGUF_URL"; }
-    echo "Download complete: $GGUF_PATH"
-fi
+
+GGUF_LOG="$PROJECT_DIR/download_gguf.log"
+MATHLIB4_LOG="$PROJECT_DIR/download_mathlib4.log"
+
+download_gguf() {
+    if [[ -f "$GGUF_PATH" ]]; then
+        echo "already downloaded" > "$GGUF_LOG"
+        return 0
+    fi
+    wget --continue -q -O "$GGUF_PATH" "$GGUF_URL" \
+        >> "$GGUF_LOG" 2>&1 \
+        || { rm -f "$GGUF_PATH"; echo "FAILED" >> "$GGUF_LOG"; return 1; }
+    echo "done" >> "$GGUF_LOG"
+}
+
+download_mathlib4() {
+    if [[ -f "$MATHLIB4_TARBALL" ]] || [[ -d "$MATHLIB4_DIR" ]]; then
+        echo "already present" > "$MATHLIB4_LOG"
+        return 0
+    fi
+    gdown "https://drive.google.com/uc?id=$MATHLIB4_GDRIVE_ID" \
+        -O "$MATHLIB4_TARBALL" --no-bar \
+        >> "$MATHLIB4_LOG" 2>&1 \
+        || { rm -f "$MATHLIB4_TARBALL"; echo "FAILED" >> "$MATHLIB4_LOG"; return 1; }
+    echo "done" >> "$MATHLIB4_LOG"
+}
+
+# Human-readable file size (bytes → B / KB / MB / GB)
+_fmtsize() {
+    local bytes=$1
+    if   (( bytes >= 1073741824 )); then printf "%.1f GB" "$(echo "scale=1; $bytes/1073741824" | bc)"
+    elif (( bytes >= 1048576    )); then printf "%.1f MB" "$(echo "scale=1; $bytes/1048576"    | bc)"
+    elif (( bytes >= 1024       )); then printf "%.1f KB" "$(echo "scale=1; $bytes/1024"       | bc)"
+    else printf "%d B" "$bytes"
+    fi
+}
+
+_filesize() { [[ -f "$1" ]] && stat -c%s "$1" 2>/dev/null || echo 0; }
+
+download_gguf &
+GGUF_PID=$!
+download_mathlib4 &
+MATHLIB4_PID=$!
+
+echo "Downloading in parallel (logs: download_gguf.log, download_mathlib4.log)"
+while kill -0 "$GGUF_PID" 2>/dev/null || kill -0 "$MATHLIB4_PID" 2>/dev/null; do
+    GGUF_STATUS="running"
+    MATHLIB4_STATUS="running"
+    kill -0 "$GGUF_PID"     2>/dev/null || GGUF_STATUS="done"
+    kill -0 "$MATHLIB4_PID" 2>/dev/null || MATHLIB4_STATUS="done"
+
+    GGUF_SIZE="$(_fmtsize "$(_filesize "$GGUF_PATH")")"
+    MATHLIB4_SIZE="$(_fmtsize "$(_filesize "$MATHLIB4_TARBALL")")"
+
+    printf "\r  gguf: %-8s %-10s   mathlib4: %-8s %-10s" \
+        "$GGUF_STATUS" "$GGUF_SIZE" "$MATHLIB4_STATUS" "$MATHLIB4_SIZE"
+    sleep 0.5
+done
+printf "\n"
+
+wait $GGUF_PID     || die "GGUF download failed (see $GGUF_LOG)"
+wait $MATHLIB4_PID || die "mathlib4 download failed (see $MATHLIB4_LOG)"
+
+step "Downloads complete"
 
 # ============================================================
 # 4. Install Lean (elan) + build mathlib4
@@ -91,11 +149,9 @@ fi
 # shellcheck source=/dev/null
 source "$ELAN_ENV"
 
-MATHLIB4_TARBALL="$PROJECT_DIR/mathlib4.tar.gz"
-
 if [[ ! -d "$MATHLIB4_DIR" ]]; then
     if [[ -f "$MATHLIB4_TARBALL" ]]; then
-        echo "Found mathlib4.tar.gz — unpacking..."
+        echo "Unpacking mathlib4.tar.gz..."
         tar -xzf "$MATHLIB4_TARBALL" -C "$PROJECT_DIR" \
             || die "Failed to unpack $MATHLIB4_TARBALL"
         echo "Unpacked to $MATHLIB4_DIR"

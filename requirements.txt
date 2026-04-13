@@ -9,6 +9,7 @@ mpmath
 jinja2
 transformers
 ollama
+gdown
 torch
 pytest
 vllm
