@@ -76,6 +76,23 @@ def main() -> None:
         else None
     )
 
+    # tok/s tracking — accumulated from raw_generation_done events
+    tok_lock = threading.Lock()
+    total_output_tokens = 0
+    total_generation_ms = 0
+
+    def _log_event_intercepted(event_type: str, payload: Any) -> None:
+        nonlocal total_output_tokens, total_generation_ms
+        if event_type == "raw_generation_done":
+            gen_toks = payload.get("generated_tokens")
+            elapsed = payload.get("elapsed_ms")
+            if gen_toks is not None and elapsed is not None and elapsed > 0:
+                with tok_lock:
+                    total_output_tokens += gen_toks
+                    total_generation_ms += elapsed
+        if event_logger is not None:
+            event_logger.log_event(event_type, payload)
+
     decided_results: List[Dict[str, Any]] = []
     records_to_check = records
 
@@ -108,7 +125,7 @@ def main() -> None:
     def make_checker() -> AnswerChecker:
         return AnswerChecker(
             checker_cfg,
-            event_logger=event_logger.log_event if event_logger is not None else None,
+            event_logger=_log_event_intercepted,
         )
 
     # Summary counters (decided records already counted in)
@@ -161,12 +178,17 @@ def main() -> None:
                         lean_timed_out += 1
                     if attempt.get("oom"):
                         lean_oom += 1
+            with tok_lock:
+                _toks = total_output_tokens
+                _ms = total_generation_ms
+            tok_s = _toks / (_ms / 1000) if _ms > 0 else 0
             progress.set_postfix(
                 equiv=equiv_counts[True],
                 not_equiv=equiv_counts[False],
                 unknown=equiv_counts[None],
                 lean_tout=lean_timed_out,
                 lean_oom=lean_oom,
+                tok_s=f"{tok_s:.1f}",
             )
             progress.update(1)
 

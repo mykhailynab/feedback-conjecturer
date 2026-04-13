@@ -131,8 +131,8 @@ class OllamaBackend(RawBackend):
         elapsed_ms = int((time.time() - t0) * 1000)
 
         text = resp.response
-        prompt_tokens = getattr(resp, "prompt_eval_count", None)
-        generated_tokens = getattr(resp, "eval_count", None)
+        prompt_tokens = resp.prompt_eval_count
+        generated_tokens = resp.eval_count
 
         self._log_event("raw_generation_done", {
             "elapsed_ms": elapsed_ms,
@@ -165,12 +165,14 @@ class OllamaBackend(RawBackend):
 
         first_chunk = True
         output_chars = 0
+        last_part = None
         for part in client.generate(
             model=self.cfg.model,
             prompt=prompt,
             options=options,
             stream=True,
         ):
+            last_part = part
             chunk = part.response
             if chunk:
                 if first_chunk:
@@ -183,11 +185,14 @@ class OllamaBackend(RawBackend):
                     print(chunk, end="", flush=True)
                 yield chunk
 
+        prompt_tokens = last_part.prompt_eval_count
+        generated_tokens = last_part.eval_count
+
         self._log_event("raw_generation_done", {
             "elapsed_ms": int((time.time() - t0) * 1000),
             "output_chars": output_chars,
-            "prompt_tokens": None,
-            "generated_tokens": None,
+            "prompt_tokens": prompt_tokens,
+            "generated_tokens": generated_tokens,
             "timed_out": False,
         })
         if self._verbose:
