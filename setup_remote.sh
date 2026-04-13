@@ -86,7 +86,7 @@ download_mathlib4() {
         return 0
     fi
     gdown "$MATHLIB4_GDRIVE_ID" \
-        -O "$MATHLIB4_TARBALL" --no-bar \
+        -O "$MATHLIB4_TARBALL" -q \
         >> "$MATHLIB4_LOG" 2>&1 \
         || { rm -f "$MATHLIB4_TARBALL"; echo "FAILED" >> "$MATHLIB4_LOG"; return 1; }
     echo "done" >> "$MATHLIB4_LOG"
