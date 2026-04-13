@@ -3,11 +3,31 @@
 # on a remote Linux machine (tested on vast.ai 1xA6000 48G).
 #
 # Run from the project root after cloning the repo:
-#   bash setup_remote.sh
+#   bash setup_remote.sh [-p <parallelism>]
 #
 # Re-running is safe: each step checks whether its work is already done.
 
 set -euo pipefail
+
+# ============================================================
+# Argument parsing
+# ============================================================
+
+PARALLELISM=1
+
+usage() {
+    echo "Usage: $0 [-p <parallelism>]"
+    echo "  -p  Number of parallel Goedel workers (sets OLLAMA_NUM_PARALLEL and --parallelism). Default: 1"
+    exit 1
+}
+
+while getopts "p:h" opt; do
+    case $opt in
+        p) PARALLELISM="$OPTARG" ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
 
 # ============================================================
 # Output helpers
@@ -188,7 +208,7 @@ if pgrep -x ollama &>/dev/null; then
     echo "Ollama server already running"
 else
     echo "Launching ollama serve..."
-    nohup env OLLAMA_NUM_PARALLEL=1 ollama serve > /var/log/ollama.log 2>&1 &   
+    nohup env OLLAMA_NUM_PARALLEL="$PARALLELISM" ollama serve > /var/log/ollama.log 2>&1 &
     echo "Waiting for Ollama to become ready..."
     for i in $(seq 1 30); do
         if ollama list &>/dev/null 2>&1; then
@@ -245,7 +265,7 @@ echo "     export PYTHONPATH=. && \\"
 echo "     python conjecturing_agents/check_formalizations.py \\"
 echo "       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \\"
 echo "       --lean-project-dir $MATHLIB4_DIR \\"
-echo "       --parallelism 1 \\"
+echo "       --parallelism $PARALLELISM \\"
 echo "       --goedel --goedel-disprover \\"
 echo "       --goedel-proof-retries 1 \\"
 echo "       --goedel-disproof-retries 1 \\"
@@ -270,7 +290,7 @@ echo "Log file:                  $PROJECT_DIR/check_formalizations.log"
 #      python conjecturing_agents/check_formalizations.py \
 #        --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
 #        --lean-project-dir /workspace/mathlib4 \
-#        --parallelism 1 \
+#        --parallelism 6 \
 #        --goedel --goedel-disprover \
 #        --goedel-proof-retries 1 \
 #        --goedel-disproof-retries 1 \
