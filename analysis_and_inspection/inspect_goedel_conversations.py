@@ -438,6 +438,25 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     lines.append(bold("  Proof attempts  ") + dim(f"(theorem: proposed = gt)"))
     lines.append(hline("─"))
     _pct = lambda n, d: f"{100*n//max(d,1)}%" if d else "n/a"
+
+    def _attempt_check_outcome(pid: str, att: int, checking: str) -> str:
+        """
+        Returns the outcome for a single (pid, attempt, checking) session:
+          "proved"/"disproved" – session proved it
+          "failed"             – session complete but didn't prove
+          "terminated"         – session incomplete (process killed)
+          "none"               – no session of this type recorded for this attempt
+        """
+        sess_for = [s for s in sessions if s.problem_id == pid and s.attempt == att and s.checking == checking]
+        if not sess_for:
+            return "none"
+        s = sess_for[0]
+        if s.proved:
+            return "proved" if checking == "proof" else "disproved"
+        if s.complete:
+            return "failed"
+        return "terminated"
+
     lines.append(f"  {'Total proof sessions:':<40} {len(all_proofs)}")
     lines.append(f"  {'  proved (equivalent=True):':<40} "
                  f"{green(str(len(proved)))}  {dim(_pct(len(proved), len(all_proofs)))}")
@@ -461,6 +480,64 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
         lines.append(f"  {'  incomplete (killed mid-run):':<40} "
                      f"{dim(str(len(incomplete_disproofs)))}  "
                      f"{dim(_pct(len(incomplete_disproofs), len(all_disproofs)))}")
+
+    all_attempts: set = set(results.keys())
+
+    n_resolved_goedel = 0
+    n_resolved = 0
+    cat_counts: Dict[str, int] = defaultdict(int)
+    for pid, att in all_attempts:
+        p_out = _attempt_check_outcome(pid, att, "proof")
+        d_out = _attempt_check_outcome(pid, att, "disproof")
+        if p_out == "proved" or d_out == "disproved":
+            n_resolved_goedel += 1
+            continue
+        otherwise_eq = results[(pid, att)].get("equivalent") is True
+        otherwise_neq = results[(pid, att)].get("equivalent") is False
+        if otherwise_eq or otherwise_neq:
+            n_resolved += 1
+            continue
+        # Inconclusive — bucket by the combination of outcomes
+        if p_out == "none" and d_out == "none":
+            cat_counts["skipped"] += 1
+        elif p_out == "failed" and d_out == "failed":
+            cat_counts["proof failed, disproof failed"] += 1
+        elif p_out == "failed" and d_out == "terminated":
+            cat_counts["proof failed, disproof terminated"] += 1
+        elif p_out == "terminated" and d_out == "failed":
+            cat_counts["proof terminated, disproof failed"] += 1
+        elif p_out == "terminated" and d_out == "terminated":
+            cat_counts["proof terminated, disproof terminated"] += 1
+        else:
+            cat_counts[f"proof {p_out}, disproof {d_out}"] += 1
+
+    n_total_attempts = len(all_attempts)
+    n_inconclusive = n_total_attempts - n_resolved_goedel - n_resolved
+    lines.append("")
+    lines.append(bold("  Inconclusive attempt breakdown"))
+    lines.append(hline("─"))
+    lines.append(f"  {'Total attempts tracked:':<44} {n_total_attempts}")
+    lines.append(f"  {'  resolved (goedel, proved or disproved):':<44} "
+                 f"{green(str(n_resolved_goedel))}  {dim(_pct(n_resolved_goedel, n_total_attempts))}")
+    lines.append(f"  {'  resolved (other methods):':<44} "
+                 f"{green(str(n_resolved))}  {dim(_pct(n_resolved, n_total_attempts))}")
+    lines.append(f"  {'  inconclusive:':<44} "
+                 f"{yellow(str(n_inconclusive))}  {dim(_pct(n_inconclusive, n_total_attempts))}")
+    _ordered_cats = [
+        "skipped",
+        "proof failed, disproof failed",
+        "proof failed, disproof terminated",
+        "proof terminated, disproof failed",
+        "proof terminated, disproof terminated",
+    ]
+    remaining = dict(cat_counts)
+    for cat in _ordered_cats:
+        count = remaining.pop(cat, 0)
+        label = f"    {cat}:"
+        lines.append(f"  {label:<44} {dim(str(count))}  {dim(_pct(count, n_inconclusive))}")
+    for cat, count in sorted(remaining.items(), key=lambda x: -x[1]):
+        label = f"    {cat}:"
+        lines.append(f"  {label:<44} {dim(str(count))}  {dim(_pct(count, n_inconclusive))}")
 
     # Termination reason breakdown
     lines.append("")
