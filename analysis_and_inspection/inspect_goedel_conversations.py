@@ -19,14 +19,14 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import sys
+import json
 import textwrap
+import argparse
+import numpy as np
 from collections import defaultdict
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ class ProverSession:
     max_rounds: int
     start_ts: str
     # Fields from prover_session_done (None if incomplete)
-    proved: Optional[bool]
+    theorem_proved: Optional[bool]
     termination_reason: Optional[str]
     rounds_used: Optional[int]
     elapsed_ms: Optional[int]
@@ -123,6 +123,7 @@ class ProverSession:
 
     @property
     def complete(self) -> bool:
+        # the termination ireason is not none if we found an end event
         return self.termination_reason is not None
 
     @property
@@ -130,7 +131,7 @@ class ProverSession:
         """Human-readable outcome string."""
         if not self.complete:
             return "incomplete"
-        if self.proved:
+        if self.theorem_proved:
             return "disproved" if self.checking == "disproof" else "proved"
         return "failed"
 
@@ -172,17 +173,14 @@ def _parse_chat_messages(prompt_text: str) -> List[Dict[str, str]]:
     return messages
 
 
-def load_sessions(events_path: str) -> List[ProverSession]:
+def load_goedel_sessions(goedel_events_path: str) -> List[ProverSession]:
     """
     Build ProverSession objects from goedel_events.jsonl.
 
-    When the same (problem_id, attempt, checking) appears more than once
-    (e.g. a killed run followed by --continue), events are merged in order:
-    the latest prover_session_done wins; rounds are taken from the run that
-    has a session_done, falling back to the run with the most rounds.
+    NOTE: Only works for pass@1 so far
     """
     events: List[Dict[str, Any]] = []
-    with open(events_path, encoding="utf-8") as fh:
+    with open(goedel_events_path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
@@ -194,8 +192,8 @@ def load_sessions(events_path: str) -> List[ProverSession]:
     for e in events:
         pid = e.get("problem_id")
         att = e.get("attempt")
-        chk = e.get("checking", "proof")
-        evt = e.get("event", "")
+        chk = e.get("checking")
+        evt = e.get("event")
         if pid is None or att is None:
             continue
         if evt in ("prover_session_start", "prover_round_done", "prover_session_done"):
@@ -209,10 +207,13 @@ def load_sessions(events_path: str) -> List[ProverSession]:
         dones  = [e for e in evts if e["event"] == "prover_session_done"]
         rounds_evts = [e for e in evts if e["event"] == "prover_round_done"]
 
+        # assert pass@1
+        assert len(starts) <= 1
+        assert len(dones) <= 1
+
         if not starts:
             continue
 
-        # Prefer the start that corresponds to the last done, else last start
         start_evt = starts[-1]
         done_evt  = dones[-1] if dones else None
 
@@ -241,7 +242,7 @@ def load_sessions(events_path: str) -> List[ProverSession]:
             seed=start_evt.get("seed", 0),
             max_rounds=start_evt.get("max_rounds", 0),
             start_ts=start_evt.get("ts", ""),
-            proved=done_evt.get("proved") if done_evt else None,
+            theorem_proved=done_evt.get("proved") if done_evt else None,
             termination_reason=done_evt.get("termination_reason") if done_evt else None,
             rounds_used=done_evt.get("rounds_used") if done_evt else None,
             elapsed_ms=done_evt.get("elapsed_ms") if done_evt else None,
@@ -419,10 +420,10 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     incomplete_proofs    = [s for s in all_proofs    if not s.complete]
     incomplete_disproofs = [s for s in all_disproofs if not s.complete]
 
-    proved    = [s for s in proofs    if s.proved]
-    failed_p  = [s for s in proofs    if not s.proved]
-    disproved = [s for s in disproofs if s.proved]
-    failed_d  = [s for s in disproofs if not s.proved]
+    proved    = [s for s in proofs    if s.theorem_proved]
+    failed_p  = [s for s in proofs    if not s.theorem_proved]
+    disproved = [s for s in disproofs if s.theorem_proved]
+    failed_d  = [s for s in disproofs if not s.theorem_proved]
 
     lines.append("")
     lines.append("═" * WIDTH)
@@ -438,24 +439,6 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     lines.append(bold("  Proof attempts  ") + dim(f"(theorem: proposed = gt)"))
     lines.append(hline("─"))
     _pct = lambda n, d: f"{100*n//max(d,1)}%" if d else "n/a"
-
-    def _attempt_check_outcome(pid: str, att: int, checking: str) -> str:
-        """
-        Returns the outcome for a single (pid, attempt, checking) session:
-          "proved"/"disproved" – session proved it
-          "failed"             – session complete but didn't prove
-          "terminated"         – session incomplete (process killed)
-          "none"               – no session of this type recorded for this attempt
-        """
-        sess_for = [s for s in sessions if s.problem_id == pid and s.attempt == att and s.checking == checking]
-        if not sess_for:
-            return "none"
-        s = sess_for[0]
-        if s.proved:
-            return "proved" if checking == "proof" else "disproved"
-        if s.complete:
-            return "failed"
-        return "terminated"
 
     lines.append(f"  {'Total proof sessions:':<40} {len(all_proofs)}")
     lines.append(f"  {'  proved (equivalent=True):':<40} "
@@ -481,10 +464,30 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
                      f"{dim(str(len(incomplete_disproofs)))}  "
                      f"{dim(_pct(len(incomplete_disproofs), len(all_disproofs)))}")
 
+    def _attempt_check_outcome(pid: str, att: int, checking: str) -> str:
+        """
+        Returns the outcome for a single (pid, attempt, checking) session:
+          "proved"/"disproved" - session proved it
+          "failed"             - session complete but didn't prove
+          "terminated"         - session incomplete (process killed)
+          "none"               - no session of this type recorded for this attempt
+        """
+        sess_for = [s for s in sessions if s.problem_id == pid and s.attempt == att and s.checking == checking]
+        # assert pass@1 (for now)
+        assert len(sess_for) <= 1
+        if not sess_for:
+            return "none"
+        s = sess_for[0]
+        if s.theorem_proved:
+            return "proved" if checking == "proof" else "disproved"
+        if s.complete:
+            return "failed"
+        return "terminated"
+    
     all_attempts: set = set(results.keys())
 
     n_resolved_goedel = 0
-    n_resolved = 0
+    n_resolved_otherwise = 0
     cat_counts: Dict[str, int] = defaultdict(int)
     for pid, att in all_attempts:
         p_out = _attempt_check_outcome(pid, att, "proof")
@@ -495,7 +498,7 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
         otherwise_eq = results[(pid, att)].get("equivalent") is True
         otherwise_neq = results[(pid, att)].get("equivalent") is False
         if otherwise_eq or otherwise_neq:
-            n_resolved += 1
+            n_resolved_otherwise += 1
             continue
         # Inconclusive — bucket by the combination of outcomes
         if p_out == "none" and d_out == "none":
@@ -512,7 +515,7 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
             cat_counts[f"proof {p_out}, disproof {d_out}"] += 1
 
     n_total_attempts = len(all_attempts)
-    n_inconclusive = n_total_attempts - n_resolved_goedel - n_resolved
+    n_inconclusive = n_total_attempts - n_resolved_goedel - n_resolved_otherwise
     lines.append("")
     lines.append(bold("  Inconclusive attempt breakdown"))
     lines.append(hline("─"))
@@ -520,7 +523,7 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     lines.append(f"  {'  resolved (goedel, proved or disproved):':<44} "
                  f"{green(str(n_resolved_goedel))}  {dim(_pct(n_resolved_goedel, n_total_attempts))}")
     lines.append(f"  {'  resolved (other methods):':<44} "
-                 f"{green(str(n_resolved))}  {dim(_pct(n_resolved, n_total_attempts))}")
+                 f"{green(str(n_resolved_otherwise))}  {dim(_pct(n_resolved_otherwise, n_total_attempts))}")
     lines.append(f"  {'  inconclusive:':<44} "
                  f"{yellow(str(n_inconclusive))}  {dim(_pct(n_inconclusive, n_total_attempts))}")
     _ordered_cats = [
@@ -539,41 +542,127 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
         label = f"    {cat}:"
         lines.append(f"  {label:<44} {dim(str(count))}  {dim(_pct(count, n_inconclusive))}")
 
-    # Termination reason breakdown
+    # Failure reason breakdown (for complete sessions)
     lines.append("")
-    lines.append(bold("  Termination reasons (complete proof sessions)"))
+    lines.append(bold("  Failure reasons (complete proof sessions)"))
     lines.append(hline("─"))
     reason_counts: Dict[str, int] = defaultdict(int)
     for s in proofs:
         reason_counts[s.termination_reason or "unknown"] += 1
+    max_count = max(reason_counts.values())
     for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
-        bar = "█" * min(count, 40)
+        bar = "█" * int(count / max_count * 40)
         lines.append(f"  {reason:<35} {count:>4}  {dim(bar)}")
+
+    all_goedel_results = [  # includes results before --continue
+        r
+        for rs in results.values()
+        for r in rs["all_results"]
+        if r.get("method") in ("goedel_prover", "goedel_disprover")
+    ]
+
+    session_keys = set((s.problem_id, s.attempt) for s in sessions)
+    goedel_results_from_current_run = [
+        r
+        for rs in results.values()
+        for r in rs["all_results"]
+        if (rs["problem_id"], rs["attempt"]) in session_keys
+        if r.get("method") in ("goedel_prover", "goedel_disprover")
+    ]
+    goedel_killed_reasons = [
+        r['details']['traceback'].split('\n')[-2]
+        for r in goedel_results_from_current_run
+        if r.get('details', {}).get("error") is not None
+    ]
+    goedel_killed_reason_counts: Dict[str, int] = defaultdict(int)
+    for reason in goedel_killed_reasons:
+        goedel_killed_reason_counts[reason] += 1
+
+    lines.append("")
+    lines.append(bold("  Incomplete session reasons"))
+    lines.append(hline("─"))
+    lines.append(f"  {'Goedel-results from current run:':<40}  {len(goedel_results_from_current_run)}")
+    lines.append(f"  {'Total killed mid-run:':<40}  {len(goedel_killed_reasons)}")
+    lines.append(f"  Reason counts:")
+    max_count = max(goedel_killed_reason_counts.values())
+    for reason, count in sorted(goedel_killed_reason_counts.items(), key=lambda x: -x[1]):
+        bar = "█" * int(count / max_count * 40)
+        reason = f"  {reason}"
+        lines.append(f"  {reason:<40} {count:>4}  {dim(bar)}")
 
     # Round distribution (complete proof sessions)
     if proofs:
         lines.append("")
-        lines.append(bold("  Rounds used (proof sessions)"))
+        lines.append(bold("  Rounds used (complete proof sessions)"))
         lines.append(hline("─"))
         round_counts: Dict[int, int] = defaultdict(int)
         for s in proofs:
             round_counts[s.rounds_used or 0] += 1
+        max_count = max(reason_counts.values())
         for n_rounds in sorted(round_counts):
             label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
             count = round_counts[n_rounds]
-            bar = "█" * min(count, 40)
+            bar = "█" * int(count / max_count * 40)
             lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
+    
+    # Round distribution (complete disproof sessions)
+    if disproofs:
+        lines.append("")
+        lines.append(bold("  Rounds used (complete disproof sessions)"))
+        lines.append(hline("─"))
+        round_counts: Dict[int, int] = defaultdict(int)
+        for s in disproofs:
+            round_counts[s.rounds_used or 0] += 1
+        max_count = max(reason_counts.values())
+        for n_rounds in sorted(round_counts):
+            label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
+            count = round_counts[n_rounds]
+            bar = "█" * int(count / max_count * 40)
+            lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
+    
+    # TODO: parse rounds for this
+    # # Round distribution (incomplete proof sessions)
+    # if incomplete_proofs:
+    #     lines.append("")
+    #     lines.append(bold("  Rounds used (incomplete proof sessions)"))
+    #     lines.append(hline("─"))
+    #     round_counts: Dict[int, int] = defaultdict(int)
+    #     for s in incomplete_proofs:
+    #         round_counts[s.rounds_used or 0] += 1
+    #     max_count = max(reason_counts.values())
+    #     for n_rounds in sorted(round_counts):
+    #         label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
+    #         count = round_counts[n_rounds]
+    #         bar = "█" * int(count / max_count * 40)
+    #         lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
+    
+    # # Round distribution (incomplete disproof sessions)
+    # if incomplete_disproofs:
+    #     lines.append("")
+    #     lines.append(bold("  Rounds used (incomplete disproof sessions)"))
+    #     lines.append(hline("─"))
+    #     round_counts: Dict[int, int] = defaultdict(int)
+    #     for s in incomplete_disproofs:
+    #         round_counts[s.rounds_used or 0] += 1
+    #     max_count = max(reason_counts.values())
+    #     for n_rounds in sorted(round_counts):
+    #         label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
+    #         count = round_counts[n_rounds]
+    #         bar = "█" * int(count / max_count * 40)
+    #         lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
 
     # Timing
     times = [s.elapsed_ms for s in complete if s.elapsed_ms is not None]
     if times:
         avg_ms = sum(times) / len(times)
+        median_ms = np.median(times)
         max_ms = max(times)
         min_ms = min(times)
         lines.append("")
-        lines.append(bold("  Session timing"))
+        lines.append(bold("  Session timing (complete sessions)"))
         lines.append(hline("─"))
         lines.append(f"  {'Average session time:':<40} {_fmt_ms(int(avg_ms))}")
+        lines.append(f"  {'Median session time:':<40} {_fmt_ms(int(median_ms))}")
         lines.append(f"  {'Fastest session:':<40} {_fmt_ms(min_ms)}")
         lines.append(f"  {'Slowest session:':<40} {_fmt_ms(max_ms)}")
 
@@ -597,32 +686,32 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
         lines.append(f"  {'  no code block in output:':<40} {dim(str(n_nocode))}")
         lines.append(f"  {'  context window exceeded:':<40} {dim(str(n_ctx))}")
 
-    # check_results cross-reference
-    if results:
-        goedel_results = [
-            r for r in results.values()
-            if r.get("method") in ("goedel_prover", "goedel_disprover")
-        ]
+    proven_goedel_results = [
+        r for r in results.values()
+        if r.get("method") in ("goedel_prover", "goedel_disprover")
+    ]
+
+    lines.append("")
+    lines.append(bold("  check_results.jsonl"))
+    lines.append(hline("─"))
+    lines.append(f"  {'Total records:':<40} {len(results)}")
+    lines.append(f"  {'Decided by Goedel (proof/disproof):':<40} {len(proven_goedel_results)}")
+    lines.append(f"  {'  From previous runs:':<40} {dim(len(all_goedel_results) - len(sessions))}")
+    n_eq_true  = sum(1 for r in results.values() if r.get("equivalent") is True)
+    n_eq_false = sum(1 for r in results.values() if r.get("equivalent") is False)
+    n_eq_none  = sum(1 for r in results.values() if r.get("equivalent") is None)
+    lines.append(f"  {'equivalent=True:':<40} {green(str(n_eq_true))}")
+    lines.append(f"  {'equivalent=False (disproved):':<40} {red(str(n_eq_false))}")
+    lines.append(f"  {'equivalent=None (inconclusive):':<40} {yellow(str(n_eq_none))}")
+    by_method: Dict[str, int] = defaultdict(int)
+    for r in results.values():
+        if r.get("equivalent") is True:
+            by_method[r.get("method", "?")] += 1
+    if by_method:
         lines.append("")
-        lines.append(bold("  check_results.jsonl cross-reference"))
-        lines.append(hline("─"))
-        lines.append(f"  {'Total records:':<40} {len(results)}")
-        lines.append(f"  {'Decided by Goedel (proof/disproof):':<40} {len(goedel_results)}")
-        n_eq_true  = sum(1 for r in results.values() if r.get("equivalent") is True)
-        n_eq_false = sum(1 for r in results.values() if r.get("equivalent") is False)
-        n_eq_none  = sum(1 for r in results.values() if r.get("equivalent") is None)
-        lines.append(f"  {'equivalent=True:':<40} {green(str(n_eq_true))}")
-        lines.append(f"  {'equivalent=False (disproved):':<40} {red(str(n_eq_false))}")
-        lines.append(f"  {'equivalent=None (inconclusive):':<40} {yellow(str(n_eq_none))}")
-        by_method: Dict[str, int] = defaultdict(int)
-        for r in results.values():
-            if r.get("equivalent") is True:
-                by_method[r.get("method", "?")] += 1
-        if by_method:
-            lines.append("")
-            lines.append(dim("  Methods that yielded equivalent=True:"))
-            for method, count in sorted(by_method.items(), key=lambda x: -x[1]):
-                lines.append(f"    {method:<35} {count}")
+        lines.append(dim("  Methods that yielded equivalent=True:"))
+        for method, count in sorted(by_method.items(), key=lambda x: -x[1]):
+            lines.append(f"    {method:<35} {count}")
 
     lines.append("")
     lines.append("═" * WIDTH)
@@ -633,7 +722,7 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
 # Filtering
 # ---------------------------------------------------------------------------
 
-_FILTER_CHOICES = ("proof", "disproof", "proved", "failed", "disproved", "incomplete")
+_FILTER_CHOICES = ("proof", "disproof", "proved", "disproved", "failed", "incomplete")
 
 
 def apply_filter(sessions: List[ProverSession], filter_val: Optional[str]) -> List[ProverSession]:
@@ -652,6 +741,8 @@ def apply_filter(sessions: List[ProverSession], filter_val: Optional[str]) -> Li
         return [s for s in sessions if s.outcome == "failed"]
     if f == "incomplete":
         return [s for s in sessions if not s.complete]
+    if filter_val is not None:
+        raise ValueError(f"--filter must be one of {_FILTER_CHOICES}, got {filter_val}")
     return sessions
 
 
@@ -667,13 +758,13 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "--events",
+        "--goedel-events",
         required=True,
         help="Path to goedel_events.jsonl.",
     )
     p.add_argument(
         "--results",
-        default="",
+        required=True,
         help="Path to check_results.jsonl (optional, adds cross-reference info).",
     )
     p.add_argument(
@@ -682,7 +773,11 @@ def main() -> None:
         default=None,
         help=(
             "Show only a subset of sessions: "
-            "proof / disproof / proved / failed / disproved / incomplete."
+            "proof / disproof / proved / disproved / failed / incomplete."
+            "\n- proof/disproof include unsuccessful sessions"
+            "\n- proved/disproved include only successful sessions"
+            "\n- incomplete are the ones w/o an end event (timeout exception, keyboardinterrupt, etc.)"
+            "\n- failed are the ones that had issues with context/rounds/splice error"
         ),
     )
     p.add_argument(
@@ -693,7 +788,7 @@ def main() -> None:
     p.add_argument(
         "--max-sessions",
         type=int,
-        default=0,
+        default=20,
         help="Maximum number of sessions to display (0 = all).",
     )
     p.add_argument(
@@ -722,28 +817,24 @@ def main() -> None:
     if args.no_color or not sys.stdout.isatty():
         _USE_COLOR = False
 
-    sessions = load_sessions(args.events)
-
-    results: Dict[Tuple, Dict] = {}
-    if args.results:
-        results = load_check_results(args.results)
+    sessions = load_goedel_sessions(args.goedel_events)
+    results = load_check_results(args.results)
 
     # Filter
-    filtered = sessions
+    filtered_sessions = sessions
     if args.problem_id:
-        filtered = [s for s in filtered if s.problem_id == args.problem_id]
-    filtered = apply_filter(filtered, args.filter)
+        filtered_sessions = [s for s in filtered_sessions if s.problem_id == args.problem_id]
+    filtered_sessions = apply_filter(filtered_sessions, args.filter)
 
-    to_display = filtered
+    to_display = filtered_sessions
     if args.max_sessions > 0:
-        to_display = to_display[: args.max_sessions]
+        to_display = to_display[:args.max_sessions]
 
     # Display conversations
     if not args.stats_only:
         print(f"\n{bold('Goedel Conversation Inspector')}")
-        print(dim(f"Events file : {args.events}"))
-        if args.results:
-            print(dim(f"Results file: {args.results}"))
+        print(dim(f"Events file : {args.goedel_events}"))
+        print(dim(f"Results file: {args.results}"))
         filter_desc = []
         if args.problem_id:
             filter_desc.append(f"problem_id={args.problem_id}")
@@ -751,7 +842,7 @@ def main() -> None:
             filter_desc.append(f"filter={args.filter}")
         if filter_desc:
             print(dim(f"Filter      : {', '.join(filter_desc)}"))
-        print(dim(f"Showing {len(to_display)} of {len(filtered)} filtered sessions "
+        print(dim(f"Showing {len(to_display)} of {len(filtered_sessions)} filtered sessions "
                   f"({len(sessions)} total)"))
 
         for sess in to_display:
@@ -763,7 +854,6 @@ def main() -> None:
                 no_truncate=args.no_truncate,
             ))
 
-    # Stats (always printed unless there's nothing)
     print(render_stats(sessions, results))
 
 
