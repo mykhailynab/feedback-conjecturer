@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from conjecturing_agents.lean_regex import (
     BY_CLAUSE_RE,
+    TERM_SORRY_RE,
     extract_lean_code_block,
 )
 
@@ -36,13 +37,20 @@ def _return_theorem_to_replace(text: str) -> Optional[Tuple[int, int]]:
 
 
 def normalize_for_prompt(statement: str) -> str:
-    """Ensure the theorem statement ends with ``:= by sorry``."""
+    """Ensure the theorem statement ends with ``:= by sorry``.
+
+    Handles both tactic-mode (``:= by sorry``) and term-mode (``:= sorry``)
+    scaffolds, normalising both to ``:= by sorry``.
+    """
     m = BY_CLAUSE_RE.search(statement)
-    if not m:
-        raise ValueError(
-            "normalize_for_prompt: cannot find ':= by' in the input statement."
-        )
-    return statement[: m.start()] + ":= by sorry"
+    if m:
+        return statement[: m.start()] + ":= by sorry"
+    m2 = TERM_SORRY_RE.search(statement)
+    if m2:
+        return statement[: m2.start()] + ":= by sorry"
+    raise ValueError(
+        "normalize_for_prompt: cannot find ':= by' or ':= sorry' in the input statement."
+    )
 
 
 def replace_statement_in_proof(statement: str, proof: str) -> str:

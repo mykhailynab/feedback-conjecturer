@@ -81,6 +81,9 @@ SORRY_RE = re.compile(r"\bsorry\b")
 # Matches ``:= by`` in theorem statements.
 BY_CLAUSE_RE = re.compile(r":=\s*by\b", re.MULTILINE)
 
+# Matches term-mode `:= sorry` (no `by`) — may span a newline between `:=` and `sorry`.
+TERM_SORRY_RE = re.compile(r":=\s*sorry\b", re.MULTILINE)
+
 # ---------------------------------------------------------------------------
 # Fenced code block patterns
 # ---------------------------------------------------------------------------
