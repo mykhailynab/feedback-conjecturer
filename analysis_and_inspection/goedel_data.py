@@ -1,7 +1,7 @@
 """
 Data model and parsing for Goedel prover event logs.
 
-Reads goedel_events.jsonl and check_results.jsonl into typed Python objects.
+Reads check_goedel_events.jsonl and check_results.jsonl into typed Python objects.
 """
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def parse_chat_messages(prompt_text: str) -> List[Dict[str, str]]:
 
 def load_goedel_sessions(goedel_events_path: str) -> List[ProverSession]:
     """
-    Build ProverSession objects from goedel_events.jsonl.
+    Build ProverSession objects from check_goedel_events.jsonl.
 
     NOTE: Only works for pass@1 so far
     """

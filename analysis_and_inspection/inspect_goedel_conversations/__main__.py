@@ -2,12 +2,12 @@
 """
 Inspect Goedel prover conversations from a check_formalizations run.
 
-Reads goedel_events.jsonl and check_results.jsonl to display the full
+Reads check_goedel_events.jsonl and check_results.jsonl to display the full
 multi-turn conversation each session had, along with summary stats.
 
 Usage:
     PYTHONPATH=analysis_and_inspection python -m inspect_goedel_conversations \\
-        --goedel-events logs/.../goedel_events.jsonl \\
+        --goedel-events logs/.../check_goedel_events.jsonl \\
         --results       logs/.../check_results.jsonl \\
         [--filter  proof|disproof|proved|failed|disproved|incomplete] \\
         [--problem-id <id>] \\
@@ -33,7 +33,7 @@ def main() -> None:
         description="Inspect Goedel prover conversations from a check_formalizations run.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--goedel-events", required=True, help="Path to goedel_events.jsonl.")
+    p.add_argument("--goedel-events", required=True, help="Path to check_goedel_events.jsonl.")
     p.add_argument("--results", required=True, help="Path to check_results.jsonl.")
     p.add_argument(
         "--filter",

@@ -1,7 +1,7 @@
 """
 Thread-safe JSONL event logger for check_formalizations runs.
 
-Writes one record per line to ``goedel_events.jsonl`` (alongside
+Writes one record per line to ``check_goedel_events.jsonl`` (alongside
 ``check_results.jsonl``).  Each record has the form::
 
     {"ts": "<iso>", "event": "<type>", ...payload...}

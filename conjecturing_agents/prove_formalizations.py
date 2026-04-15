@@ -54,7 +54,9 @@ def main() -> None:
         Path(cfg.formalizations_path).parent / "prove_results.jsonl"
     )
 
-    events_path = str(Path(output_path).parent / "prove_goedel_events.jsonl")
+    events_path = cfg.events_path or str(
+        Path(output_path).parent / "prove_goedel_events.jsonl"
+    )
     event_logger = ProveFormalizationsLogger(events_path)
 
     tok_lock = threading.Lock()
@@ -100,6 +102,8 @@ def main() -> None:
         if cfg.enable_parallel_disproof:
             outer = max(1, cfg.parallelism // 2)
             print(f"Mode: parallel proof+disproof ({outer} outer workers * 2 sub-threads)")
+        elif cfg.enable_sequential_disproof:
+            print(f"Mode: sequential proof then disproof ({cfg.parallelism} workers)")
         else:
             print(f"Mode: proof only ({cfg.parallelism} workers)")
 

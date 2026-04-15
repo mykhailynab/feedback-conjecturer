@@ -14,6 +14,7 @@ class ProveFormalizationsConfig:
     # Input / output
     formalizations_path: str = "logs/conjecture_formalization_logs/formalizations.jsonl"
     output_path: str = ""  # defaults to <formalizations_path parent>/prove_results.jsonl
+    events_path: str = ""  # defaults to <output_path parent>/prove_goedel_events.jsonl
 
     # Lean compiler (shared by proof and disproof agents)
     lean_project_dir: str = "."
@@ -25,10 +26,15 @@ class ProveFormalizationsConfig:
     # Proof / disproof
     # Number of independent proof attempts per record.
     proof_retries: int = 1
-    # Run a negated-theorem disproof attempt alongside the proof.
+    # Run proof and disproof concurrently in separate threads per record.
+    # Uses parallelism // 2 outer workers (each spawning 2 sub-threads).
     enable_parallel_disproof: bool = False
-    # Number of independent disproof attempts per record (only used when
-    # enable_parallel_disproof=True).
+    # Run disproof sequentially after a failed proof attempt, within the same
+    # worker thread.  Uses parallelism workers (no division).
+    # Mutually exclusive with enable_parallel_disproof.
+    enable_sequential_disproof: bool = False
+    # Number of independent disproof attempts per record (used when either
+    # disproof flag is set).
     disproof_retries: int = 1
 
     # Goedel prover settings
@@ -98,8 +104,14 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
         errs.append("proof_retries must be >= 1")
     if cfg.disproof_retries <= 0:
         errs.append("disproof_retries must be >= 1")
+    if cfg.enable_parallel_disproof and cfg.enable_sequential_disproof:
+        errs.append(
+            "--enable-parallel-disproof and --enable-sequential-disproof are mutually exclusive"
+        )
     if cfg.enable_parallel_disproof and cfg.parallelism % 2 != 0:
-        errs.append("when enable_parallel_disproof is enabled, cfg.parallelism must be divisible by 2")
+        errs.append(
+            "when --enable-parallel-disproof is set, --parallelism must be divisible by 2"
+        )
 
     if errs:
         raise ValueError("Invalid configuration:\n- " + "\n- ".join(errs))
@@ -206,6 +218,14 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
             "Defaults to <formalizations_path parent>/prove_results.jsonl."
         ),
     )
+    p.add_argument(
+        "--events-path",
+        default=ProveFormalizationsConfig.events_path,
+        help=(
+            "Where to write the raw generation event log (prove_goedel_events.jsonl). "
+            "Defaults to <output_path parent>/prove_goedel_events.jsonl."
+        ),
+    )
 
     # Lean compiler
     p.add_argument(
@@ -259,12 +279,24 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         ),
     )
     p.add_argument(
+        "--enable-sequential-disproof",
+        dest="enable_sequential_disproof",
+        action="store_true",
+        default=ProveFormalizationsConfig.enable_sequential_disproof,
+        help=(
+            "After a failed proof attempt, run a disproof of the negated theorem "
+            "in the same worker thread. Uses --parallelism workers (no division). "
+            "Mutually exclusive with --enable-parallel-disproof."
+        ),
+    )
+    p.add_argument(
         "--disproof-retries",
         type=int,
         default=ProveFormalizationsConfig.disproof_retries,
         help=(
             "Number of independent disproof attempts per record. "
-            "Only used when --enable-parallel-disproof is set. Default: 1."
+            "Used when --enable-parallel-disproof or --enable-sequential-disproof "
+            "is set. Default: 1."
         ),
     )
 
@@ -486,6 +518,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
     cfg = ProveFormalizationsConfig(
         formalizations_path=args.formalizations_path,
         output_path=args.output_path,
+        events_path=args.events_path,
         lean_project_dir=args.lean_project_dir,
         lean_workspace_subdir=args.lean_workspace_subdir,
         lean_timeout_seconds=args.lean_timeout_seconds,
@@ -493,6 +526,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         lean_max_memory_megabytes=args.lean_max_memory_megabytes,
         proof_retries=args.proof_retries,
         enable_parallel_disproof=args.enable_parallel_disproof,
+        enable_sequential_disproof=args.enable_sequential_disproof,
         disproof_retries=args.disproof_retries,
         goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,

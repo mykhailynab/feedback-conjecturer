@@ -128,6 +128,74 @@ def process_record_sequential(
     )
 
 
+def process_record_sequential_with_disproof(
+    record: Dict[str, Any],
+    *,
+    proof_agent: GoedelProverAgent,
+    proof_backend: RawBackend,
+    disproof_agent: GoedelProverAgent,
+    disproof_backend: RawBackend,
+    proof_retries: int,
+    disproof_retries: int,
+    base_seed: int,
+    event_logger: Optional[EventLoggerFn],
+) -> Dict[str, Any]:
+    """
+    Run proof first; if every retry fails, run disproof in the same thread.
+    Uses the full ``parallelism`` worker count (no division by 2).
+    """
+    problem_id = record.get("problem_id")
+    attempt = record.get("attempt")
+
+    lean_statement = str(record.get("lean_statement_without_comment") or "")
+    abbrev_decl = str(record.get("final_abbrev_declaration") or "")
+
+    try:
+        proved_lean = replace_abbrev_in_statement(lean_statement, abbrev_decl)
+    except Exception as exc:
+        return _error_record(record, "replace_abbrev_error", str(exc))
+
+    meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
+    proof_result = _run_prove_attempts(
+        proof_agent, proof_backend, proved_lean,
+        base_seed=base_seed,
+        retries=proof_retries,
+        event_logger=event_logger,
+        metadata=meta,
+    )
+
+    disproof_result: Optional[GoedelProverResult] = None
+    if not proof_result.proved:
+        try:
+            negated_lean = negate_theorem_statement(proved_lean)
+        except Exception as exc:
+            return _error_record(record, "negate_theorem_error", str(exc))
+
+        dis_meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
+        disproof_result = _run_prove_attempts(
+            disproof_agent, disproof_backend, negated_lean,
+            base_seed=(base_seed + 0x10000) & 0x7FFFFFFF,
+            retries=disproof_retries,
+            event_logger=event_logger,
+            metadata=dis_meta,
+        )
+        return _build_output_record(
+            record,
+            proved_lean=proved_lean,
+            negated_lean=negated_lean,
+            proof_result=proof_result,
+            disproof_result=disproof_result,
+        )
+
+    return _build_output_record(
+        record,
+        proved_lean=proved_lean,
+        negated_lean=None,
+        proof_result=proof_result,
+        disproof_result=None,
+    )
+
+
 def process_record_parallel(
     record: Dict[str, Any],
     *,
@@ -292,10 +360,10 @@ class ProveFormalizationsScheduler:
         if event_logger is not None:
             self._proof_backend.set_event_logger(event_logger)
 
-        # Build disproof agent (only when enable_parallel_disproof)
+        # Build disproof agent (when either disproof mode is active)
         self._disproof_agent: Optional[GoedelProverAgent] = None
         self._disproof_backend: Optional[RawBackend] = None
-        if cfg.enable_parallel_disproof:
+        if cfg.enable_parallel_disproof or cfg.enable_sequential_disproof:
             goedel_disproof_cfg = make_goedel_prover_config(cfg, workspace_suffix="disproof")
             self._disproof_agent = GoedelProverAgent(goedel_disproof_cfg)
             self._disproof_backend = make_goedel_backend(cfg)
@@ -357,6 +425,20 @@ class ProveFormalizationsScheduler:
                 assert self._disproof_agent is not None
                 assert self._disproof_backend is not None
                 return process_record_parallel(
+                    rec,
+                    proof_agent=self._proof_agent,
+                    proof_backend=self._proof_backend,
+                    disproof_agent=self._disproof_agent,
+                    disproof_backend=self._disproof_backend,
+                    proof_retries=cfg.proof_retries,
+                    disproof_retries=cfg.disproof_retries,
+                    base_seed=base_seed,
+                    event_logger=self.event_logger,
+                )
+            elif cfg.enable_sequential_disproof:
+                assert self._disproof_agent is not None
+                assert self._disproof_backend is not None
+                return process_record_sequential_with_disproof(
                     rec,
                     proof_agent=self._proof_agent,
                     proof_backend=self._proof_backend,

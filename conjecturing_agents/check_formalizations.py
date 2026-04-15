@@ -69,7 +69,7 @@ def main() -> None:
 
     checker_cfg = make_checker_config(cfg)
 
-    events_path = str(Path(output_path).parent / "goedel_events.jsonl")
+    events_path = str(Path(output_path).parent / "check_goedel_events.jsonl")
     event_logger = (
         CheckFormalizationsLogger(events_path)
         if (checker_cfg.use_goedel_prover or checker_cfg.use_goedel_disprover)
