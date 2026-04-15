@@ -67,6 +67,7 @@ MATHLIB4_GDRIVE_ID="1_0QVdYxrsaibi-eCqBrdLWnscpUbpLhA"
 OLLAMA_MODEL_NAME="goedel-v2"   # matches AnswerCheckerConfig.goedel_ollama_model default
 MODELFILE_PATH="$PROJECT_DIR/Modelfile"
 ELAN_ENV="/root/.elan/env"
+LOGS_DIR_NAME="conjecture_formalization_logs_20mins"
 
 # ============================================================
 # 1. apt packages
@@ -271,7 +272,7 @@ CHECKER_SCREEN_CMD="screen -dmS check_formalizations bash -c \
      cd $PROJECT_DIR && \
      export PYTHONPATH=. && \
      python conjecturing_agents/check_formalizations.py \
-       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+       --formalizations-path logs/$LOGS_DIR_NAME/formalizations.jsonl \
        --lean-project-dir $MATHLIB4_DIR \
        --parallelism $PARALLELISM \
        --goedel --goedel-disprover \
@@ -286,7 +287,7 @@ PROVER_SCREEN_CMD="screen -dmS prove_formalizations bash -c \
      cd $PROJECT_DIR && \
      export PYTHONPATH=. && \
      python conjecturing_agents/prove_formalizations.py \
-       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+       --formalizations-path logs/$LOGS_DIR_NAME/formalizations.jsonl \
        --lean-project-dir $MATHLIB4_DIR \
        --parallelism $PARALLELISM \
        --enable-parallel-disproof \
@@ -301,8 +302,9 @@ echo "Prover command (opens a detached screen session):"
 echo "  $PROVER_SCREEN_CMD"
 echo ""
 echo "For script monitoring:"
-echo "  tail -f check_formalizations.log"
-echo "  tail -f prove_formalizations.log"
+echo "  screen -dmS monitor_check_formalizations tail -f check_formalizations.log"
+echo "  screen -dmS monitor_prove_formalizations tail -f prove_formalizations.log"
+echo ""
 echo "For ollama monitoring:"
 echo "  screen -dmS ollama_mon tail -f /var/log/ollama.log"
 echo ""
