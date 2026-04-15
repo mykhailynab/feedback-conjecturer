@@ -14,18 +14,27 @@ set -euo pipefail
 # ============================================================
 
 PARALLELISM=1
+START_CHECKER=false
+START_PROVER=false
 
 usage() {
-    echo "Usage: $0 [-p <parallelism>]"
-    echo "  -p  Number of parallel Goedel workers (sets OLLAMA_NUM_PARALLEL and --parallelism). Default: 1"
+    echo "Usage: $0 [-p <parallelism>] [--start-checker] [--start-prover]"
+    echo "  -p / --parallelism   Number of parallel Goedel workers (sets OLLAMA_NUM_PARALLEL"
+    echo "                       and --parallelism). Default: 1."
+    echo "                       Must be even when --start-prover is used (parallel disproof)."
+    echo "  --start-checker      After setup, launch check_formalizations in a screen session."
+    echo "  --start-prover       After setup, launch prove_formalizations in a screen session."
+    echo "  -h / --help          Show this message."
     exit 1
 }
 
-while getopts "p:h" opt; do
-    case $opt in
-        p) PARALLELISM="$OPTARG" ;;
-        h) usage ;;
-        *) usage ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--parallelism)   PARALLELISM="$2"; shift 2 ;;
+        --start-checker)    START_CHECKER=true; shift ;;
+        --start-prover)     START_PROVER=true; shift ;;
+        -h|--help)          usage ;;
+        *)                  usage ;;
     esac
 done
 
@@ -251,47 +260,68 @@ echo "Model '$OLLAMA_MODEL_NAME' registered"
 # echo "Ollama test passed"
 
 # ============================================================
-# 9. Print the run command
+# 9. Print (and optionally launch) the run commands
 # ============================================================
 
 step "Setup complete"
+
+# --------------- checker command ---------------
+CHECKER_SCREEN_CMD="screen -dmS check_formalizations bash -c \
+    'source $ELAN_ENV && \
+     cd $PROJECT_DIR && \
+     export PYTHONPATH=. && \
+     python conjecturing_agents/check_formalizations.py \
+       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+       --lean-project-dir $MATHLIB4_DIR \
+       --parallelism $PARALLELISM \
+       --goedel --goedel-disprover \
+       --goedel-proof-retries 1 \
+       --goedel-disproof-retries 1 \
+       --continue &> check_formalizations.log'"
+
+# --------------- prover command ---------------
+# --enable-parallel-disproof requires even --parallelism.
+PROVER_SCREEN_CMD="screen -dmS prove_formalizations bash -c \
+    'source $ELAN_ENV && \
+     cd $PROJECT_DIR && \
+     export PYTHONPATH=. && \
+     python conjecturing_agents/prove_formalizations.py \
+       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+       --lean-project-dir $MATHLIB4_DIR \
+       --parallelism $PARALLELISM \
+       --enable-parallel-disproof \
+       --limit-prover-tokens 8000 \
+       --continue &> prove_formalizations.log'"
+
 echo ""
-echo "Run the following command (opens a detached screen session):"
+echo "Checker command (opens a detached screen session):"
+echo "  $CHECKER_SCREEN_CMD"
 echo ""
-echo "  screen -dmS check_formalizations bash -c \\"
-echo "    'source $ELAN_ENV && \\"
-echo "     cd $PROJECT_DIR && \\"
-echo "     export PYTHONPATH=. && \\"
-echo "     python conjecturing_agents/check_formalizations.py \\"
-echo "       --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \\"
-echo "       --lean-project-dir $MATHLIB4_DIR \\"
-echo "       --parallelism $PARALLELISM \\"
-echo "       --goedel --goedel-disprover \\"
-echo "       --goedel-proof-retries 1 \\"
-echo "       --goedel-disproof-retries 1 \\"
-echo "       --continue &> check_formalizations.log'"
+echo "Prover command (opens a detached screen session):"
+echo "  $PROVER_SCREEN_CMD"
 echo ""
 echo "For script monitoring:"
-echo "  screen -dmS monitor_check_formalizations tail -f check_formalizations.log"
+echo "  tail -f check_formalizations.log"
+echo "  tail -f prove_formalizations.log"
 echo "For ollama monitoring:"
 echo "  screen -dmS ollama_mon tail -f /var/log/ollama.log"
 echo ""
 echo "For GPU monitoring:"
 echo "  screen -S gpu -dm watch -n 1 nvidia-smi"
 echo ""
-echo "To attach to the session:  screen -r check_formalizations"
-echo "Log file:                  $PROJECT_DIR/check_formalizations.log"
+echo "To attach to a session:  screen -r check_formalizations  (or prove_formalizations)"
 
-# Example output:
-# screen -dmS check_formalizations bash -c \
-#     'source /root/.elan/env && \
-#      cd /workspace && \
-#      export PYTHONPATH=. && \
-#      python conjecturing_agents/check_formalizations.py \
-#        --formalizations-path logs/conjecture_equivalence_goedel_pass1/formalizations.jsonl \
-#        --lean-project-dir /workspace/mathlib4 \
-#        --parallelism 6 \
-#        --goedel --goedel-disprover \
-#        --goedel-proof-retries 1 \
-#        --goedel-disproof-retries 1 \
-#        --continue &> check_formalizations.log'
+if $START_CHECKER; then
+    step "Launching check_formalizations screen session"
+    eval "$CHECKER_SCREEN_CMD" || die "Failed to start check_formalizations screen session"
+    echo "Started.  Log: $PROJECT_DIR/check_formalizations.log"
+fi
+
+if $START_PROVER; then
+    if (( PARALLELISM % 2 != 0 )); then
+        die "--start-prover requires even --parallelism for --enable-parallel-disproof (got $PARALLELISM)"
+    fi
+    step "Launching prove_formalizations screen session"
+    eval "$PROVER_SCREEN_CMD" || die "Failed to start prove_formalizations screen session"
+    echo "Started.  Log: $PROJECT_DIR/prove_formalizations.log"
+fi
