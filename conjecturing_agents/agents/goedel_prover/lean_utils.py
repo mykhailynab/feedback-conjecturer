@@ -10,8 +10,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-
-_BY_CLAUSE_RE = re.compile(r":=\s*by\b", re.MULTILINE)
+from conjecturing_agents.lean_regex import (
+    BY_CLAUSE_RE,
+)
 
 
 def _remove_comments(text: str) -> str:
@@ -35,7 +36,7 @@ def _return_theorem_to_replace(text: str) -> Optional[Tuple[int, int]]:
 
 def normalize_for_prompt(statement: str) -> str:
     """Ensure the theorem statement ends with ``:= by sorry``."""
-    m = _BY_CLAUSE_RE.search(statement)
+    m = BY_CLAUSE_RE.search(statement)
     if not m:
         raise ValueError(
             "normalize_for_prompt: cannot find ':= by' in the input statement."
@@ -65,19 +66,6 @@ def replace_statement_in_proof(statement: str, proof: str) -> str:
 
     return stats_re[: stats_span_[1]].replace("sorry", "") + proof_str[span[1] :]
 
-
-def extract_lean4_code_block(model_text: str) -> Optional[str]:
-    """Return the last ```lean4 / ```lean code block from model output."""
-    patterns = [
-        r"```lean4\n(.*?)\n```",
-        r"```lean4\n(.*?)```",
-        r"```lean\n(.*?)```",
-    ]
-    for pat in patterns:
-        matches = re.findall(pat, model_text, re.DOTALL)
-        if matches:
-            return matches[-1]
-    return None
 
 
 def format_lean_errors(

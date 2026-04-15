@@ -1,6 +1,7 @@
 """Renders summary statistics for a collection of ProverSessions."""
 from __future__ import annotations
 
+import math
 import numpy as np
 from collections import defaultdict
 from typing import Dict, List, Tuple
@@ -269,6 +270,68 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
         lines.append(dim("  Methods that yielded equivalent=True:"))
         for method, count in sorted(by_method.items(), key=lambda x: -x[1]):
             lines.append(f"    {method:<35} {count}")
+
+    # ---- Proven accuracy section ----
+    # Group results by problem_id to compute per-problem pass@k stats.
+    # Each value in `results` is keyed by (problem_id, attempt); the record
+    # carries problem_id and attempt as fields too.
+    by_problem: Dict[str, List] = defaultdict(list)
+    for r in results.values():
+        pid = r.get("problem_id")
+        if pid is not None:
+            by_problem[pid].append(r.get("equivalent"))
+
+    n_problems = len(by_problem)
+    n_total_attempts = len(results)
+
+    n_eq_true_total  = sum(1 for r in results.values() if r.get("equivalent") is True)
+    n_eq_false_total = sum(1 for r in results.values() if r.get("equivalent") is False)
+
+    # pass@1 bounds (over all attempts as the universe)
+    p1_lo = n_eq_true_total  / n_total_attempts if n_total_attempts else 0.0
+    p1_hi = 1.0 - n_eq_false_total / n_total_attempts if n_total_attempts else 0.0
+
+    # Infer k as the most common number of attempts per problem.
+    attempts_per_problem = [len(v) for v in by_problem.values()]
+    k_inferred = max(set(attempts_per_problem), key=attempts_per_problem.count) if attempts_per_problem else 1
+
+    def _pass_at_k(n: int, c: int, k: int) -> float:
+        """Exact pass@k: P(at least 1 correct in k draws without replacement)."""
+        if c <= 0:
+            return 0.0
+        if n - c < k:
+            return 1.0
+        return 1.0 - math.comb(n - c, k) / math.comb(n, k)
+
+    # Per-problem pass@k, averaged across problems (lower and upper bounds).
+    pk_lo_values: List[float] = []
+    pk_hi_values: List[float] = []
+    for equivs in by_problem.values():
+        n = len(equivs)
+        c_lo = sum(1 for e in equivs if e is True)
+        c_hi = n - sum(1 for e in equivs if e is False)
+        pk_lo_values.append(_pass_at_k(n, c_lo, k_inferred))
+        pk_hi_values.append(_pass_at_k(n, c_hi, k_inferred))
+
+    pk_lo = sum(pk_lo_values) / n_problems if n_problems else 0.0
+    pk_hi = sum(pk_hi_values) / n_problems if n_problems else 0.0
+
+    lines.append("")
+    lines.append("═" * WIDTH)
+    lines.append(bold("  PROVEN ACCURACY"))
+    lines.append("═" * WIDTH)
+    lines.append(dim(
+        "  Bounds derived from check_results.jsonl: lower = proven-correct / total,"
+        " upper = 1 - proven-wrong / total."
+    ))
+    lines.append(dim(f"  Universe: {n_total_attempts} attempts across {n_problems} problems."))
+    lines.append(dim(f"  Inferred k = {k_inferred} (most common attempts-per-problem)."))
+    lines.append("")
+    lines.append(f"  {'pass@1  lower bound (proven correct):':<44} {green(f'{p1_lo:.2%}')}")
+    lines.append(f"  {'pass@1  upper bound (1 − proven wrong):':<44} {yellow(f'{p1_hi:.2%}')}")
+    lines.append("")
+    lines.append(f"  {'pass@' + str(k_inferred) + '  lower bound:':<44} {green(f'{pk_lo:.2%}')}")
+    lines.append(f"  {'pass@' + str(k_inferred) + '  upper bound:':<44} {yellow(f'{pk_hi:.2%}')}")
 
     lines.append("")
     lines.append("═" * WIDTH)

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from openai_harmony import Message, ReasoningEffort, ToolNamespaceConfig
 
@@ -17,10 +16,14 @@ from conjecturing_agents.tool_calling_backends.jupyter import (
     JupyterKernelConfig,
     JupyterToolBackend,
 )
+from conjecturing_agents.lean_regex import (
+    extract_abbrev_name_from_statement,
+    extract_rhs_from_abbrev_declaration,
+    extract_last_abbrev_declaration,
+)
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     LeanCompilerConfig,
     Lean4CompilerToolBackend,
-    extract_lean_code_block_or_text,
 )
 
 
@@ -70,182 +73,6 @@ DEFAULT_CONJECTURE_FORMALIZER_LEAN_TOOL_PROMPT = (
     "- Use the returned diagnostics to repair syntax, notation, typing, or namespace issues.\n"
 )
 
-
-# ============================================================
-# Regex helpers / parsing utilities
-# ============================================================
-
-_ABBREV_NAME_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([\w']+)",
-    re.MULTILINE,
-)
-_SINGLE_LINE_ABBREV_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([\w']+)[^\n]*:=.*$",
-    re.MULTILINE,
-)
-_ABBREV_WITH_COMMENT_RE = re.compile(
-    r"(?P<abbrev_line>^[ \t]*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev[^\n]*:=.*\r?\n)"
-    r"(?P<comment_line>^[ \t]*--[^\n]*\r?\n?)",
-    re.MULTILINE,
-)
-_TOP_LEVEL_DECL_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*"
-    r"(?:abbrev|theorem|lemma|def|example|structure|class|inductive|instance|"
-    r"namespace|end|section|open|import|#check|#eval|#print)\b"
-)
-
-
-def extract_abbrev_name_from_statement(lean_statement: str) -> Optional[str]:
-    m = _ABBREV_NAME_RE.search(lean_statement or "")
-    if not m:
-        return None
-    return m.group(1)
-
-
-def extract_ground_truth_comment_and_strip_line(lean4_full_contents: str) -> Tuple[str, str]:
-    """
-    Extract the answer comment immediately following the abbrev placeholder and
-    remove exactly that comment line, preserving imports/open statements and the
-    rest of the scaffold.
-
-    Expected shape:
-
-        abbrev foo_solution : ... := sorry
-        -- <ground truth answer>
-
-        theorem ...
-    """
-    matches = list(_ABBREV_WITH_COMMENT_RE.finditer(lean4_full_contents or ""))
-    if len(matches) != 1:
-        raise ValueError(
-            f"Expected exactly one abbrev+comment match, found {len(matches)}"
-        )
-
-    m = matches[0]
-    comment_line = m.group("comment_line")
-    ground_truth_answer = comment_line.split("--", 1)[1].strip()
-
-    stripped = (
-        lean4_full_contents[: m.start("comment_line")]
-        + lean4_full_contents[m.end("comment_line") :]
-    )
-
-    # Make absolutely sure that the exact matched comment line was removed.
-    if comment_line in stripped:
-        raise ValueError("Failed to remove the matched abbrev answer comment line")
-
-    return ground_truth_answer, stripped
-
-
-def extract_last_abbrev_declaration(
-    text: str,
-    *,
-    required_abbrev_name: Optional[str] = None,
-) -> Optional[str]:
-    """
-    Extract the last plausible abbrev declaration from either:
-      - a ```lean4``` code block, or
-      - raw model text.
-
-    We intentionally reject declarations containing `sorry`.
-    """
-    if not text:
-        return None
-
-    candidate_texts: List[str] = []
-
-    code_block = extract_lean_code_block_or_text(text)
-    if code_block:
-        candidate_texts.append(code_block)
-
-    stripped_text = text.strip()
-    if code_block != stripped_text:
-        candidate_texts.append(text)
-
-    for candidate_text in candidate_texts:
-        lines = candidate_text.splitlines()
-        abbrev_indices = [
-            i for i, line in enumerate(lines)
-            if _ABBREV_NAME_RE.match(line)
-        ]
-
-        for idx in reversed(abbrev_indices):
-            head = lines[idx]
-            m_name = _ABBREV_NAME_RE.match(head)
-            if not m_name:
-                continue
-
-            abbrev_name = m_name.group(1)
-            if required_abbrev_name is not None and abbrev_name != required_abbrev_name:
-                continue
-
-            block_lines = [head]
-            for j in range(idx + 1, len(lines)):
-                line = lines[j]
-                if _TOP_LEVEL_DECL_RE.match(line):
-                    break
-                if line.strip().startswith("```"):
-                    break
-                block_lines.append(line)
-
-            decl = "\n".join(block_lines).strip()
-            if ":=" not in decl:
-                continue
-            if re.search(r"\bsorry\b", decl):
-                continue
-
-            return decl
-
-    return None
-
-
-def extract_rhs_from_abbrev_declaration(abbrev_declaration: str) -> Optional[str]:
-    if ":=" not in abbrev_declaration:
-        return None
-    return abbrev_declaration.split(":=", 1)[1].strip()
-
-
-def replace_abbrev_in_statement(
-    lean_statement: str,
-    new_abbrev_declaration: str,
-    *,
-    required_abbrev_name: Optional[str] = None,
-) -> str:
-    """
-    Replace the unique abbrev declaration line in the scaffold with the generated
-    abbrev declaration.
-
-    This is useful both for external runners and for prompts/tool calls.
-    """
-    current_abbrev_name = extract_abbrev_name_from_statement(lean_statement)
-    if current_abbrev_name is None:
-        raise ValueError("Could not find abbrev name in Lean statement")
-
-    if required_abbrev_name is not None and current_abbrev_name != required_abbrev_name:
-        raise ValueError(
-            f"Lean statement abbrev name {current_abbrev_name!r} does not match "
-            f"required_abbrev_name={required_abbrev_name!r}"
-        )
-
-    new_abbrev_name = extract_abbrev_name_from_statement(new_abbrev_declaration)
-    if new_abbrev_name is None:
-        raise ValueError("Could not find abbrev name in new_abbrev_declaration")
-
-    if new_abbrev_name != current_abbrev_name:
-        raise ValueError(
-            f"Generated abbrev name {new_abbrev_name!r} does not match scaffold "
-            f"abbrev name {current_abbrev_name!r}"
-        )
-
-    matches = list(_SINGLE_LINE_ABBREV_RE.finditer(lean_statement))
-    if len(matches) != 1:
-        raise ValueError(
-            f"Expected exactly one single-line abbrev placeholder in scaffold, found {len(matches)}"
-        )
-
-    m = matches[0]
-    replacement = new_abbrev_declaration.strip()
-    return lean_statement[: m.start()] + replacement + lean_statement[m.end() :]
 
 
 # ============================================================
@@ -580,11 +407,6 @@ __all__ = [
     "DEFAULT_CONJECTURE_FORMALIZER_LEAN_TOOL_PROMPT",
     "ConjectureFormalizerConfig",
     "ConjectureFormalizerAgent",
-    "extract_abbrev_name_from_statement",
-    "extract_ground_truth_comment_and_strip_line",
-    "extract_last_abbrev_declaration",
-    "extract_rhs_from_abbrev_declaration",
-    "replace_abbrev_in_statement",
     "conjecture_formalizer_terminate_on_message",
     "conjecture_formalizer_terminate_on_session_end",
 ]

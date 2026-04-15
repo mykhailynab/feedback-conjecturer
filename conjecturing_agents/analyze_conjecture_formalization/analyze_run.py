@@ -6,6 +6,7 @@ import json
 import math
 
 from conjecturing_agents.tools import load_jsonl
+from conjecturing_agents.lean_regex import ABBREV_RHS_RE as _ABBREV_RHS_RE
 import argparse
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -16,11 +17,6 @@ from typing import Any, Dict, Iterable, List, Optional
 # ============================================================
 # Helpers
 # ============================================================
-
-_ABBREV_RHS_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+[\w']+\b[^\n]*:=\s*(.*)$",
-    re.MULTILINE,
-)
 
 
 def extract_rhs_from_abbrev_declaration(text: Optional[str]) -> Optional[str]:

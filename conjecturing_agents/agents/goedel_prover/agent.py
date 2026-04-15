@@ -3,6 +3,7 @@ GoedelProverAgent — drives multi-round proof generation + Lean compilation.
 """
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -119,6 +120,7 @@ class GoedelProverAgent:
         stream_callback: Optional[Callable[[str], None]] = None,
         event_logger: Optional[EventLoggerFn] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        stop_event: Optional[threading.Event] = None,
     ) -> GoedelProverResult:
         """
         Attempt to prove ``theorem_statement`` using up to
@@ -172,6 +174,10 @@ class GoedelProverAgent:
         prompt = ""
 
         for round_idx in range(self.cfg.max_rounds + 1):
+            if stop_event is not None and stop_event.is_set():
+                termination_reason = "cancelled"
+                break
+
             round_record: Dict[str, Any] = {"round": round_idx}
             round_t0 = time.time()
 

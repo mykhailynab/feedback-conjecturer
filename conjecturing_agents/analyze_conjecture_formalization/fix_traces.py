@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import re
 import json
 
 from conjecturing_agents.tools import load_jsonl, write_jsonl
@@ -12,6 +11,14 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 
 from tqdm import tqdm
 
+from conjecturing_agents.lean_regex import (
+    ABBREV_NAME_RE,
+    TOP_LEVEL_DECL_RE,
+    SORRY_RE,
+    extract_abbrev_name_from_statement,
+    extract_rhs_from_abbrev_declaration,
+    replace_abbrev_in_statement,
+)
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     Lean4CompilerBackend,
     LeanCompilerConfig,
@@ -22,88 +29,18 @@ from conjecturing_agents.tool_calling_backends.lean4_compiler import (
 # Lean / abbrev extraction helpers
 # ============================================================
 
-_ABBREV_NAME_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([\w']+)",
-    re.MULTILINE,
-)
-
-_SINGLE_LINE_ABBREV_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+([\w']+)[^\n]*:=.*$",
-    re.MULTILINE,
-)
-
-_TOP_LEVEL_DECL_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*"
-    r"(?:abbrev|theorem|lemma|def|example|structure|class|inductive|instance|"
-    r"namespace|end|section|open|import|#check|#eval|#print)\b"
-)
+import re
 
 _FINAL_CHANNEL_RE = re.compile(
     r"<\|channel\|>final<\|message\|>(.*?)<\|return\|>",
     re.DOTALL,
 )
 
-_LEAN_BLOCK_PATTERNS = [
-    re.compile(r"```lean4\s*\n(.*?)\n```", re.DOTALL),
-    re.compile(r"```lean4\s*\n(.*?)```", re.DOTALL),
-    re.compile(r"```lean\s*\n(.*?)\n```", re.DOTALL),
-    re.compile(r"```lean\s*\n(.*?)```", re.DOTALL),
-]
-
 
 CompileCacheValue = Tuple[bool, Optional[str], Optional[str], Optional[str]]
 
 
-def extract_abbrev_name_from_statement(lean_statement: str) -> Optional[str]:
-    m = _ABBREV_NAME_RE.search(lean_statement or "")
-    return m.group(1) if m else None
-
-
-def extract_rhs_from_abbrev_declaration(abbrev_declaration: str) -> Optional[str]:
-    if ":=" not in abbrev_declaration:
-        return None
-    return abbrev_declaration.split(":=", 1)[1].strip()
-
-
-def replace_abbrev_in_statement(
-    lean_statement: str,
-    new_abbrev_declaration: str,
-    *,
-    required_abbrev_name: Optional[str] = None,
-) -> str:
-    current_abbrev_name = extract_abbrev_name_from_statement(lean_statement)
-    if current_abbrev_name is None:
-        raise ValueError("Could not find abbrev name in lean_statement")
-
-    if required_abbrev_name is not None and current_abbrev_name != required_abbrev_name:
-        raise ValueError(
-            f"Scaffold abbrev name {current_abbrev_name!r} != required_abbrev_name {required_abbrev_name!r}"
-        )
-
-    new_abbrev_name = extract_abbrev_name_from_statement(new_abbrev_declaration)
-    if new_abbrev_name is None:
-        raise ValueError("Could not find abbrev name in new_abbrev_declaration")
-
-    if new_abbrev_name != current_abbrev_name:
-        raise ValueError(
-            f"Generated abbrev name {new_abbrev_name!r} != scaffold abbrev name {current_abbrev_name!r}"
-        )
-
-    matches = list(_SINGLE_LINE_ABBREV_RE.finditer(lean_statement))
-    if len(matches) != 1:
-        raise ValueError(f"Expected exactly one abbrev placeholder in scaffold, found {len(matches)}")
-
-    m = matches[0]
-    replacement = new_abbrev_declaration.strip()
-    return lean_statement[: m.start()] + replacement + lean_statement[m.end() :]
-
-
-def extract_lean_code_block(text: str) -> Optional[str]:
-    for pat in _LEAN_BLOCK_PATTERNS:
-        matches = pat.findall(text or "")
-        if matches:
-            return matches[-1].strip()
-    return None
+from conjecturing_agents.lean_regex import extract_lean_code_block
 
 
 def extract_final_channel_messages(raw_output: str) -> List[str]:
@@ -136,12 +73,12 @@ def extract_last_abbrev_declaration_from_text(
         lines = candidate_text.splitlines()
         abbrev_indices = [
             i for i, line in enumerate(lines)
-            if _ABBREV_NAME_RE.match(line)
+            if ABBREV_NAME_RE.match(line)
         ]
 
         for idx in reversed(abbrev_indices):
             head = lines[idx]
-            m_name = _ABBREV_NAME_RE.match(head)
+            m_name = ABBREV_NAME_RE.match(head)
             if not m_name:
                 continue
 
@@ -152,7 +89,7 @@ def extract_last_abbrev_declaration_from_text(
             block_lines = [head]
             for j in range(idx + 1, len(lines)):
                 line = lines[j]
-                if _TOP_LEVEL_DECL_RE.match(line):
+                if TOP_LEVEL_DECL_RE.match(line):
                     break
                 if line.strip().startswith("```"):
                     break
@@ -161,7 +98,7 @@ def extract_last_abbrev_declaration_from_text(
             decl = "\n".join(block_lines).strip()
             if ":=" not in decl:
                 continue
-            if re.search(r"\bsorry\b", decl):
+            if SORRY_RE.search(decl):
                 continue
 
             return decl

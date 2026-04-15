@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import re
-
+from conjecturing_agents.lean_regex import extract_preamble
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     Lean4CompilerBackend,
     LeanCompileResult,
@@ -9,11 +8,6 @@ from conjecturing_agents.tool_calling_backends.lean4_compiler import (
 
 from .result import CheckResult
 
-
-# Matches the single-line abbrev placeholder in the scaffold.
-_ABBREV_LINE_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+[\w']+"
-)
 
 # Tactic block tried in order for each attempt.
 _TACTIC_BLOCKS = [
@@ -33,16 +27,6 @@ _TACTIC_BLOCKS = [
     "simp only [{name}]\n  native_decide",
 ]
 
-
-def extract_preamble(lean_statement: str) -> str:
-    """Return the import/open lines that precede the abbrev placeholder."""
-    lines = lean_statement.splitlines()
-    preamble: list[str] = []
-    for line in lines:
-        if _ABBREV_LINE_RE.match(line):
-            break
-        preamble.append(line)
-    return "\n".join(preamble).rstrip()
 
 
 def build_equiv_check_file(

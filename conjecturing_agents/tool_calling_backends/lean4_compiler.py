@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import threading
@@ -98,33 +97,10 @@ class LeanCompilerConfig:
 # Lean code extraction helpers
 # ============================================================
 
-def extract_lean_code_block(model_text: str) -> Optional[str]:
-    """
-    Extract the last fenced Lean code block.
-    """
-    if not model_text:
-        return None
-
-    patterns = [
-        r"```lean4\s*\n(.*?)\n```",
-        r"```lean4\s*\n(.*?)```",
-        r"```lean\s*\n(.*?)\n```",
-        r"```lean\s*\n(.*?)```",
-    ]
-
-    for pat in patterns:
-        matches = re.findall(pat, model_text, re.DOTALL)
-        if matches:
-            return matches[-1].strip()
-
-    return None
-
-
-def extract_lean_code_block_or_text(text: str) -> str:
-    code = extract_lean_code_block(text)
-    if code is not None:
-        return code
-    return (text or "").strip()
+from conjecturing_agents.lean_regex import (
+    extract_lean_code_block,
+    extract_lean_code_block_or_text,
+)
 
 
 # ============================================================

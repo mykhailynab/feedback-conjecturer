@@ -5,6 +5,7 @@ import argparse
 import json
 
 from conjecturing_agents.tools import load_jsonl
+from conjecturing_agents.lean_regex import ABBREV_RHS_RE as _ABBREV_RHS_RE
 import math
 import re
 from collections import Counter, OrderedDict
@@ -15,11 +16,6 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================
 # Helpers
 # ============================================================
-
-_ABBREV_RHS_RE = re.compile(
-    r"^\s*(?:(?:noncomputable|unsafe|protected|private)\s+)*abbrev\s+[\w']+\b[^\n]*:=\s*(.*)$",
-    re.MULTILINE,
-)
 
 
 def short(x: Any, max_len: int = 160) -> str:
