@@ -9,10 +9,10 @@ from collections import Counter, defaultdict
 import pandas as pd
 import polars as pl
 
-LOG_DIR = Path("aimo3_logs")
+LOG_DIR = Path("logs/local_qwen3_conjecturing_pass1")
 # LOG_DIR = Path("aimo3_logs_20b")
 # LOG_DIR = Path("aimo3_logs_20b_12_24")
-REF_PATH = Path("reference.csv")
+REF_PATH = Path("data/conjecture_formalizer_inputs/references_putnam.csv")
 
 ATTEMPTS_PATH = LOG_DIR / "attempts.jsonl"
 SOLUTIONS_PATH = LOG_DIR / "solutions.csv"

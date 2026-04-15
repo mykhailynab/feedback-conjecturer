@@ -377,7 +377,7 @@ class InformalCorrectnessCheckerAgent:
     def check_vs_truth(
         self,
         *,
-        backend: VLLMHarmonyBackend,
+        backend: Any,  # VLLMHarmonyBackend or OllamaChatBackend
         problem_text: str,
         truth_answer_text: str,
         candidate_answer_text: str,

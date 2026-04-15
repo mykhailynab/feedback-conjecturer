@@ -5,10 +5,6 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-
-from conjecturing_agents.inference_backends.vllm_harmony import (
-    VLLMHarmonyBackend,
-)
 from conjecturing_agents.tools import to_float_or_inf
 
 from conjecturing_agents.run_conjecturing.config import (
@@ -78,7 +74,7 @@ class ProblemScheduler:
         self,
         *,
         cfg: RunConfig,
-        backend: VLLMHarmonyBackend,
+        backend: Any,  # VLLMHarmonyBackend or OllamaChatBackend
         logger: RunLogger,
         problems: List[ProblemState],
     ):

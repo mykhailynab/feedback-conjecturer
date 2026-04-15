@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from argparse import ArgumentParser
 
 from conjecturing_agents.agents.solver import SolverAgent, SolverAgentConfig
@@ -78,20 +78,30 @@ class RunConfig:
     verbose: bool = True
     log_attempt_progress: bool = True
 
+    # Backend selection
+    # "vllm"   — use VLLMHarmonyBackend (default; GPT-OSS Harmony models)
+    # "ollama" — use OllamaChatBackend  (standard chat models via Ollama)
+    backend_type: str = "vllm"
+
+    # Ollama backend settings (used when backend_type == "ollama")
+    ollama_model: str = "qwen3.5"
+    ollama_host: str = "http://localhost:11434"
+    ollama_client_timeout: int = 960
+    ollama_top_p: float = 0.9
+    ollama_num_predict: int = 32768
+
 
 def validate_cfg(cfg: RunConfig) -> None:
     errs: List[str] = []
 
+    if cfg.backend_type not in ("vllm", "ollama"):
+        errs.append("backend_type must be 'vllm' or 'ollama'")
     if cfg.attempts_per_problem <= 0:
         errs.append("attempts_per_problem must be >= 1")
     if cfg.agent_parallelism <= 0:
         errs.append("agent_parallelism must be >= 1")
-    if cfg.batch_size <= 0:
-        errs.append("batch_size must be >= 1")
     if cfg.context_tokens <= 0:
         errs.append("context_tokens must be >= 1")
-    if cfg.preload_workers <= 0:
-        errs.append("preload_workers must be >= 1")
     if cfg.jupyter_timeout <= 0:
         errs.append("jupyter_timeout must be > 0")
     if cfg.solver_max_turns <= 0:
@@ -116,6 +126,24 @@ def validate_cfg(cfg: RunConfig) -> None:
         errs.append("checker_min_p must be in [0, 1]")
     if cfg.max_problems < 0:
         errs.append("max_problems must be >= 0")
+
+    if cfg.backend_type == "vllm":
+        if cfg.batch_size <= 0:
+            errs.append("batch_size must be >= 1")
+        if cfg.preload_workers <= 0:
+            errs.append("preload_workers must be >= 1")
+
+    if cfg.backend_type == "ollama":
+        if not cfg.ollama_model:
+            errs.append("ollama_model must be non-empty")
+        if not cfg.ollama_host:
+            errs.append("ollama_host must be non-empty")
+        if cfg.ollama_client_timeout <= 0:
+            errs.append("ollama_client_timeout must be >= 1")
+        if not (0.0 <= cfg.ollama_top_p <= 1.0):
+            errs.append("ollama_top_p must be in [0, 1]")
+        if cfg.ollama_num_predict <= 0:
+            errs.append("ollama_num_predict must be >= 1")
 
     if errs:
         raise ValueError("Invalid configuration:\n- " + "\n- ".join(errs))
@@ -146,6 +174,36 @@ def make_backend_config(cfg: RunConfig) -> VLLMHarmonyBackendConfig:
         manage_server=cfg.manage_server,
         server_log_path=cfg.server_log_path,
     )
+
+
+def make_backend(
+    cfg: RunConfig,
+    *,
+    event_logger: Optional[Callable[..., None]] = None,
+) -> Any:
+    """
+    Instantiate the appropriate inference backend based on cfg.backend_type.
+
+    Returns VLLMHarmonyBackend (default) or OllamaChatBackend.
+    """
+    if cfg.backend_type == "ollama":
+        from conjecturing_agents.inference_backends.ollama_chat_backend import (
+            OllamaChatBackend,
+            OllamaChatConfig,
+        )
+        ollama_cfg = OllamaChatConfig(
+            model=cfg.ollama_model,
+            host=cfg.ollama_host,
+            client_timeout=cfg.ollama_client_timeout,
+            top_p=cfg.ollama_top_p,
+            num_predict=cfg.ollama_num_predict,
+            context_tokens=cfg.context_tokens,
+        )
+        return OllamaChatBackend(ollama_cfg, event_logger=event_logger)
+
+    from conjecturing_agents.inference_backends.vllm_harmony import VLLMHarmonyBackend
+    return VLLMHarmonyBackend(make_backend_config(cfg), event_logger=event_logger)
+
 
 def make_solver_agent(cfg: RunConfig) -> SolverAgent:
     jupyter_cfg = JupyterKernelConfig(
@@ -234,6 +292,45 @@ def parse_args_and_validate() -> RunConfig:
         help="Do not start vLLM; connect to an already running OpenAI-compatible endpoint.",
     )
 
+    # Backend selection
+    p.add_argument(
+        "--backend",
+        dest="backend_type",
+        choices=["vllm", "ollama"],
+        default=RunConfig.backend_type,
+        help="Inference backend: 'vllm' (default, Harmony GPT-OSS) or 'ollama' (standard chat models).",
+    )
+
+    # Ollama backend settings
+    p.add_argument(
+        "--ollama-model",
+        default=RunConfig.ollama_model,
+        help="Ollama model name (backend=ollama). Default: %(default)s.",
+    )
+    p.add_argument(
+        "--ollama-host",
+        default=RunConfig.ollama_host,
+        help="Ollama server URL (backend=ollama). Default: %(default)s.",
+    )
+    p.add_argument(
+        "--ollama-client-timeout",
+        type=int,
+        default=RunConfig.ollama_client_timeout,
+        help="HTTP client timeout in seconds for Ollama requests (backend=ollama). Default: %(default)s.",
+    )
+    p.add_argument(
+        "--ollama-top-p",
+        type=float,
+        default=RunConfig.ollama_top_p,
+        help="Top-p (nucleus) sampling for Ollama (backend=ollama). Default: %(default)s.",
+    )
+    p.add_argument(
+        "--ollama-num-predict",
+        type=int,
+        default=RunConfig.ollama_num_predict,
+        help="Max tokens to generate per Ollama turn (backend=ollama). Default: %(default)s.",
+    )
+
     # Global orchestration
     p.add_argument("--agent-parallelism", type=int, default=RunConfig.agent_parallelism)
     p.add_argument("--attempts-per-problem", type=int, default=RunConfig.attempts_per_problem)
@@ -312,6 +409,12 @@ def parse_args_and_validate() -> RunConfig:
         checker_stream_text_window=args.checker_stream_text_window,
         verbose=args.verbose,
         log_attempt_progress=args.log_attempt_progress,
+        backend_type=args.backend_type,
+        ollama_model=args.ollama_model,
+        ollama_host=args.ollama_host,
+        ollama_client_timeout=args.ollama_client_timeout,
+        ollama_top_p=args.ollama_top_p,
+        ollama_num_predict=args.ollama_num_predict,
     )
 
     validate_cfg(config)

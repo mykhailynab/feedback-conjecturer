@@ -43,6 +43,22 @@ find \
     \) \
 | zip conjecturing_agents.zip -@
 
+rm -f conjecturing_agents_plus_references.zip
+
+find \
+    conjecturing_agents \
+    \( -name "__pycache__" -prune \) \
+    -o \( \
+        -type f \
+        -not -name "*.pyc" \
+        -not -name ".DS_Store" \
+        -print \
+    \) \
+| zip conjecturing_agents_plus_references.zip -@
+
+zip conjecturing_agents_plus_references.zip \
+    data/conjecture_formalizer_inputs/references_putnam.csv
+
 # Individual root-level files
 zip "$OUTPUT" \
     requirements.txt \

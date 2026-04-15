@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openai_harmony import Message, ReasoningEffort, ToolNamespaceConfig
 
@@ -279,7 +279,7 @@ class SolverAgent:
     def run_attempt(
         self,
         *,
-        backend: VLLMHarmonyBackend,
+        backend: Any,  # VLLMHarmonyBackend or OllamaChatBackend
         problem_id: str,
         problem_text: str,
         attempt_index: int,

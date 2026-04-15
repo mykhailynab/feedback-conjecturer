@@ -6,10 +6,6 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import polars as pl
 
-from conjecturing_agents.inference_backends.vllm_harmony import (
-    VLLMHarmonyBackend,
-)
-
 from conjecturing_agents.run_conjecturing.problem_scheduler import (
     ProblemState,
     ProblemScheduler
@@ -17,7 +13,7 @@ from conjecturing_agents.run_conjecturing.problem_scheduler import (
 
 from conjecturing_agents.run_conjecturing.config import (
     parse_args_and_validate,
-    make_backend_config,
+    make_backend,
 )
 
 from conjecturing_agents.run_conjecturing.logger import (
@@ -64,11 +60,7 @@ def main() -> None:
         log_attempt_progress=cfg.log_attempt_progress,
     )
 
-    backend_cfg = make_backend_config(cfg)
-    backend = VLLMHarmonyBackend(
-        backend_cfg,
-        event_logger=logger.log_event
-    )
+    backend = make_backend(cfg, event_logger=logger.log_event)
 
     problems: List[ProblemState] = [
         ProblemState(
@@ -91,8 +83,11 @@ def main() -> None:
         backend.start()
 
         if cfg.verbose:
-            print("Base URL:", backend.cfg.base_url)
-            print("Models list:", backend.client.models.list())
+            if cfg.backend_type == "vllm":
+                print("Base URL:", backend.cfg.base_url)
+                print("Models list:", backend.client.models.list())
+            else:
+                print(f"Ollama backend: model={cfg.ollama_model} host={cfg.ollama_host}")
 
         submission_rows = scheduler.run_all()
     finally:
