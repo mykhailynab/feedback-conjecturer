@@ -20,15 +20,15 @@ class ProveFormalizationsConfig:
     lean_workspace_subdir: str = ".conjecturing_agents/prove_formalizations"
     lean_timeout_seconds: int = 120
     lean_jobs: int = 4
-    lean_max_memory_megabytes: int = 4 * 1024  # 0 = no limit
+    lean_max_memory_megabytes: int = 8 * 1024  # 0 = no limit
 
     # Proof / disproof
     # Number of independent proof attempts per record.
     proof_retries: int = 1
     # Run a negated-theorem disproof attempt alongside the proof.
-    parallel_proof_disproof: bool = False
+    enable_parallel_disproof: bool = False
     # Number of independent disproof attempts per record (only used when
-    # parallel_proof_disproof=True).
+    # enable_parallel_disproof=True).
     disproof_retries: int = 1
 
     # Goedel prover settings
@@ -98,6 +98,8 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
         errs.append("proof_retries must be >= 1")
     if cfg.disproof_retries <= 0:
         errs.append("disproof_retries must be >= 1")
+    if cfg.enable_parallel_disproof and cfg.parallelism % 2 != 0:
+        errs.append("when enable_parallel_disproof is enabled, cfg.parallelism must be divisible by 2")
 
     if errs:
         raise ValueError("Invalid configuration:\n- " + "\n- ".join(errs))
@@ -246,10 +248,10 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         help="Number of independent proof attempts per record (pass@N). Default: 1.",
     )
     p.add_argument(
-        "--parallel-proof-disproof",
-        dest="parallel_proof_disproof",
+        "--enable-parallel-disproof",
+        dest="enable_parallel_disproof",
         action="store_true",
-        default=ProveFormalizationsConfig.parallel_proof_disproof,
+        default=ProveFormalizationsConfig.enable_parallel_disproof,
         help=(
             "For each record, run proof and negation-disproof concurrently in "
             "separate threads. Uses parallelism // 2 outer workers. Whichever "
@@ -262,7 +264,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         default=ProveFormalizationsConfig.disproof_retries,
         help=(
             "Number of independent disproof attempts per record. "
-            "Only used when --parallel-proof-disproof is set. Default: 1."
+            "Only used when --enable-parallel-disproof is set. Default: 1."
         ),
     )
 
@@ -446,7 +448,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         type=int,
         default=ProveFormalizationsConfig.parallelism,
         help=(
-            "Number of concurrent workers. With --parallel-proof-disproof, "
+            "Number of concurrent workers. With --enable-parallel-disproof, "
             "parallelism // 2 outer workers are used (each spawning 2 sub-threads)."
         ),
     )
@@ -490,7 +492,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         lean_jobs=args.lean_jobs,
         lean_max_memory_megabytes=args.lean_max_memory_megabytes,
         proof_retries=args.proof_retries,
-        parallel_proof_disproof=args.parallel_proof_disproof,
+        enable_parallel_disproof=args.enable_parallel_disproof,
         disproof_retries=args.disproof_retries,
         goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,

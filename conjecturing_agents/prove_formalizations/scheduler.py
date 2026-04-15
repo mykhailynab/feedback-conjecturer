@@ -10,13 +10,13 @@ Each record from formalizations.jsonl is processed as follows:
    If ``--proof-retries > 1``, run up to that many independent attempts
    (different seeds), stopping as soon as one succeeds.
 
-3. With ``--parallel-proof-disproof``:
+3. With ``--enable-parallel-disproof``:
    - Negate the theorem with ``negate_theorem_statement()``
    - Run proof and disproof in separate sub-threads sharing a
      ``threading.Event``; the first to succeed cancels the other.
    - Use ``parallelism // 2`` outer workers (each worker runs 2 sub-threads).
 
-Without ``--parallel-proof-disproof``, use ``parallelism`` workers, one per
+Without ``--enable-parallel-disproof``, use ``parallelism`` workers, one per
 record, running only the proof direction.
 """
 from __future__ import annotations
@@ -292,10 +292,10 @@ class ProveFormalizationsScheduler:
         if event_logger is not None:
             self._proof_backend.set_event_logger(event_logger)
 
-        # Build disproof agent (only when parallel_proof_disproof)
+        # Build disproof agent (only when enable_parallel_disproof)
         self._disproof_agent: Optional[GoedelProverAgent] = None
         self._disproof_backend: Optional[RawBackend] = None
-        if cfg.parallel_proof_disproof:
+        if cfg.enable_parallel_disproof:
             goedel_disproof_cfg = make_goedel_prover_config(cfg, workspace_suffix="disproof")
             self._disproof_agent = GoedelProverAgent(goedel_disproof_cfg)
             self._disproof_backend = make_goedel_backend(cfg)
@@ -345,7 +345,7 @@ class ProveFormalizationsScheduler:
                 "skip_reason": f"status={rec.get('status')}",
             })
 
-        outer_workers = cfg.parallelism // 2 if cfg.parallel_proof_disproof else cfg.parallelism
+        outer_workers = cfg.parallelism // 2 if cfg.enable_parallel_disproof else cfg.parallelism
         outer_workers = max(1, outer_workers)
 
         def process(rec: Dict[str, Any]) -> Dict[str, Any]:
@@ -353,7 +353,7 @@ class ProveFormalizationsScheduler:
             attempt = rec.get("attempt", 0)
             base_seed = hash((problem_id, attempt)) & 0x7FFFFFFF
 
-            if cfg.parallel_proof_disproof:
+            if cfg.enable_parallel_disproof:
                 assert self._disproof_agent is not None
                 assert self._disproof_backend is not None
                 return process_record_parallel(

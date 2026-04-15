@@ -4,7 +4,7 @@ Attempt to prove formalized conjectures using the Goedel prover.
 
 Reads a formalizations.jsonl produced by run_conjecture_formalization.py,
 substitutes each formalized abbrev into the Lean scaffold, and runs
-GoedelProverAgent to try to prove (and optionally disprove) the theorem.
+GoedelProverAgent to try to prove (or disprove) the theorem.
 
 Results are written to prove_results.jsonl alongside the input file.
 
@@ -13,8 +13,8 @@ Usage:
     --formalizations-path logs/.../formalizations.jsonl \\
     --lean-project-dir /path/to/mathlib4 \\
     --parallelism 8 \\
-    --proof-retries 4 \\
-    --parallel-proof-disproof
+    --proof-retries 1 \\
+    --enable-parallel-disproof
 
 Pass --continue to resume from an existing prove_results.jsonl: already-decided
 records (proved=True or disproved=True) are kept; undecided records are re-run.
@@ -97,9 +97,9 @@ def main() -> None:
     if cfg.verbose:
         print(f"Processing {total} records from {cfg.formalizations_path}")
         print(f"Output: {output_path}")
-        if cfg.parallel_proof_disproof:
+        if cfg.enable_parallel_disproof:
             outer = max(1, cfg.parallelism // 2)
-            print(f"Mode: parallel proof+disproof ({outer} outer workers × 2 sub-threads)")
+            print(f"Mode: parallel proof+disproof ({outer} outer workers * 2 sub-threads)")
         else:
             print(f"Mode: proof only ({cfg.parallelism} workers)")
 
