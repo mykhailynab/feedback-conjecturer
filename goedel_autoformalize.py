@@ -95,7 +95,7 @@ def render_with_template(
 
 # ----------------------------- Lean code utilities -----------------------------
 
-def extract_lean4_code_block(model_text: str) -> Optional[str]:
+def extract_lean_code_block(model_text: str) -> Optional[str]:
     """
     Extract the last ```lean4 ... ``` (preferred) or ```lean ... ``` code block.
     """
@@ -654,7 +654,7 @@ def main() -> None:
             prev_assistant_output = model_text
 
             # Extract Lean code block
-            code_block = extract_lean4_code_block(model_text)
+            code_block = extract_lean_code_block(model_text)
             if not code_block:
                 print(f"[Round {r}] ERROR: no ```lean4``` block found. Stopping.")
                 break

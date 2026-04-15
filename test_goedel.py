@@ -130,7 +130,7 @@ def replace_statement_in_proof(statement: str, proof: str) -> str:
     return stats_re[:stats_span_[1]].replace("sorry", "") + proof_str[span[1]:]
 
 
-def extract_lean4_code_block(model_text: str) -> Optional[str]:
+def extract_lean_code_block(model_text: str) -> Optional[str]:
     """
     Extract the last ```lean4 ... ``` or ```lean ... ``` block.
     """
@@ -936,7 +936,7 @@ theorem sample_theorem :
             state["prev_assistant_output"] = model_text
 
             # Extract Lean code block
-            code_block = extract_lean4_code_block(model_text)
+            code_block = extract_lean_code_block(model_text)
             if not code_block:
                 log({"event": "no_code_block", "round": r}, print_event=True)
                 return None

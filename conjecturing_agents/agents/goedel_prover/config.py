@@ -43,7 +43,8 @@ class GoedelProverResult:
     proved: bool
 
     # "proved" | "max_rounds_exhausted" | "context_exceeded" |
-    # "no_code_block" | "splice_error" | "exception"
+    # "no_code_block" | "splice_error" | "exception" |
+    # "token_limit" | "cancelled"
     termination_reason: str
 
     raw_output: str          # last model generation
@@ -54,3 +55,15 @@ class GoedelProverResult:
     elapsed_ms: int
 
     rounds: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Progressive proving / resume support.
+    # When termination_reason == "token_limit":
+    #   incomplete=True, conversation_history holds the messages snapshot
+    #   before the interrupted round, partial_response holds the assistant
+    #   text generated before the cut-off, and total_context_tokens is the
+    #   token count of render(conversation_history)+partial_response.
+    # On resume, the caller rebuilds that prompt and continues generation.
+    incomplete: bool = False
+    total_context_tokens: int = 0
+    conversation_history: List[Dict[str, str]] = field(default_factory=list)
+    partial_response: str = ""

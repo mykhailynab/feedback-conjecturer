@@ -62,8 +62,16 @@ def _run_prove_attempts(
     event_logger: Optional[EventLoggerFn],
     metadata: Dict[str, Any],
     stop_event: Optional[threading.Event] = None,
+    token_limit: int = 0,
+    initial_messages: Optional[List[Dict[str, Any]]] = None,
+    initial_partial_response: str = "",
 ) -> GoedelProverResult:
-    """Run up to ``retries`` proof attempts, stopping as soon as one succeeds."""
+    """Run up to ``retries`` proof attempts, stopping as soon as one succeeds.
+
+    ``initial_messages`` and ``initial_partial_response`` are used only for
+    retry 0 (resuming a saved incomplete session).  Subsequent retries always
+    start fresh with a new seed.
+    """
     last_result: Optional[GoedelProverResult] = None
     for i in range(retries):
         if stop_event is not None and stop_event.is_set():
@@ -75,12 +83,37 @@ def _run_prove_attempts(
             event_logger=event_logger,
             metadata={**metadata, "retry": i},
             stop_event=stop_event,
+            token_limit=token_limit,
+            initial_messages=initial_messages if i == 0 else None,
+            partial_response=initial_partial_response if i == 0 else "",
         )
         last_result = result
         if result.proved:
             break
     assert last_result is not None
     return last_result
+
+
+# ---------------------------------------------------------------------------
+# Resume-state extraction
+# ---------------------------------------------------------------------------
+
+def _extract_resume_state(
+    incomplete_result: Optional[Dict[str, Any]],
+    direction: str,  # "proof_result" or "disproof_result"
+) -> Tuple[Optional[List[Dict[str, str]]], str]:
+    """Return ``(initial_messages, partial_response)`` for a resumed session.
+
+    Pulls the saved conversation history and partial response from the
+    ``proof_result`` or ``disproof_result`` sub-dict of an incomplete record.
+    Returns ``(None, "")`` when there is nothing to resume from.
+    """
+    if incomplete_result is None:
+        return None, ""
+    sub: Dict[str, Any] = incomplete_result.get(direction, {})
+    msgs = sub.get("conversation_history", None)
+    partial = sub.get("partial_response", "")
+    return msgs, partial
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +128,8 @@ def process_record_sequential(
     proof_retries: int,
     base_seed: int,
     event_logger: Optional[EventLoggerFn],
+    token_limit: int = 0,
+    incomplete_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Prove only (no disproof).  Returns the result dict to be written to JSONL.
@@ -110,6 +145,7 @@ def process_record_sequential(
     except Exception as exc:
         return _error_record(record, "replace_abbrev_error", str(exc))
 
+    init_msgs, init_partial = _extract_resume_state(incomplete_result, "proof_result")
     meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
     proof_result = _run_prove_attempts(
         proof_agent, proof_backend, proved_lean,
@@ -117,6 +153,9 @@ def process_record_sequential(
         retries=proof_retries,
         event_logger=event_logger,
         metadata=meta,
+        token_limit=token_limit,
+        initial_messages=init_msgs,
+        initial_partial_response=init_partial,
     )
 
     return _build_output_record(
@@ -139,6 +178,8 @@ def process_record_sequential_with_disproof(
     disproof_retries: int,
     base_seed: int,
     event_logger: Optional[EventLoggerFn],
+    token_limit: int = 0,
+    incomplete_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Run proof first; if every retry fails, run disproof in the same thread.
@@ -155,6 +196,7 @@ def process_record_sequential_with_disproof(
     except Exception as exc:
         return _error_record(record, "replace_abbrev_error", str(exc))
 
+    init_proof_msgs, init_proof_partial = _extract_resume_state(incomplete_result, "proof_result")
     meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
     proof_result = _run_prove_attempts(
         proof_agent, proof_backend, proved_lean,
@@ -162,15 +204,21 @@ def process_record_sequential_with_disproof(
         retries=proof_retries,
         event_logger=event_logger,
         metadata=meta,
+        token_limit=token_limit,
+        initial_messages=init_proof_msgs,
+        initial_partial_response=init_proof_partial,
     )
 
+    # If proof is still incomplete (token-limited), skip disproof for now.
     disproof_result: Optional[GoedelProverResult] = None
-    if not proof_result.proved:
+    if not proof_result.proved and not proof_result.incomplete:
         try:
             negated_lean = negate_theorem_statement(proved_lean)
         except Exception as exc:
             return _error_record(record, "negate_theorem_error", str(exc))
 
+        # Resume disproof only if the prior run had one; otherwise start fresh.
+        init_dis_msgs, init_dis_partial = _extract_resume_state(incomplete_result, "disproof_result")
         dis_meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
         disproof_result = _run_prove_attempts(
             disproof_agent, disproof_backend, negated_lean,
@@ -178,6 +226,9 @@ def process_record_sequential_with_disproof(
             retries=disproof_retries,
             event_logger=event_logger,
             metadata=dis_meta,
+            token_limit=token_limit,
+            initial_messages=init_dis_msgs,
+            initial_partial_response=init_dis_partial,
         )
         return _build_output_record(
             record,
@@ -207,6 +258,8 @@ def process_record_parallel(
     disproof_retries: int,
     base_seed: int,
     event_logger: Optional[EventLoggerFn],
+    token_limit: int = 0,
+    incomplete_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Run proof and disproof concurrently.  The first to succeed signals the
@@ -231,35 +284,44 @@ def process_record_parallel(
     stop_proof = threading.Event()
     stop_disproof = threading.Event()
 
-    proof_result_holder: List[Optional[GoedelProverResult]] = [None]
-    disproof_result_holder: List[Optional[GoedelProverResult]] = [None]
+    init_proof_msgs, init_proof_partial = _extract_resume_state(incomplete_result, "proof_result")
+    init_dis_msgs, init_dis_partial = _extract_resume_state(incomplete_result, "disproof_result")
+
+    proof_result: Optional[GoedelProverResult] = None
+    disproof_result: Optional[GoedelProverResult] = None
 
     def run_proof() -> None:
+        nonlocal proof_result
         meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
-        result = _run_prove_attempts(
+        proof_result = _run_prove_attempts(
             proof_agent, proof_backend, proved_lean,
             base_seed=base_seed,
             retries=proof_retries,
             event_logger=event_logger,
             metadata=meta,
             stop_event=stop_proof,
+            token_limit=token_limit,
+            initial_messages=init_proof_msgs,
+            initial_partial_response=init_proof_partial,
         )
-        proof_result_holder[0] = result
-        if result.proved:
+        if proof_result.proved:
             stop_disproof.set()
 
     def run_disproof() -> None:
+        nonlocal disproof_result
         meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
-        result = _run_prove_attempts(
+        disproof_result = _run_prove_attempts(
             disproof_agent, disproof_backend, negated_lean,
             base_seed=(base_seed + 0x10000) & 0x7FFFFFFF,
             retries=disproof_retries,
             event_logger=event_logger,
             metadata=meta,
             stop_event=stop_disproof,
+            token_limit=token_limit,
+            initial_messages=init_dis_msgs,
+            initial_partial_response=init_dis_partial,
         )
-        disproof_result_holder[0] = result
-        if result.proved:
+        if disproof_result.proved:
             stop_proof.set()
 
     proof_thread = threading.Thread(target=run_proof, daemon=True)
@@ -268,9 +330,6 @@ def process_record_parallel(
     disproof_thread.start()
     proof_thread.join()
     disproof_thread.join()
-
-    proof_result = proof_result_holder[0]
-    disproof_result = disproof_result_holder[0]
 
     return _build_output_record(
         record,
@@ -296,6 +355,10 @@ def _build_output_record(
     proved = proof_result.proved if proof_result is not None else False
     disproved = disproof_result.proved if disproof_result is not None else False
 
+    incomplete = (
+        (proof_result is not None and proof_result.incomplete) or
+        (disproof_result is not None and disproof_result.incomplete)
+    )
     out: Dict[str, Any] = {
         "problem_id": record.get("problem_id"),
         "attempt": record.get("attempt"),
@@ -306,6 +369,7 @@ def _build_output_record(
         "negated_lean": negated_lean,
         "proved": proved,
         "disproved": disproved,
+        "incomplete": incomplete,
         "proof_result": _result_to_dict(proof_result) if proof_result is not None else None,
         "disproof_result": _result_to_dict(disproof_result) if disproof_result is not None else None,
     }
@@ -376,12 +440,19 @@ class ProveFormalizationsScheduler:
         self,
         records: List[Dict[str, Any]],
         on_result: Callable[[Dict[str, Any]], None],
+        incomplete_map: Optional[Dict[Tuple, Dict[str, Any]]] = None,
     ) -> None:
         """
         Process all ``records`` and call ``on_result`` for each completed
         output record (may be called from multiple threads).
+
+        ``incomplete_map`` maps ``(problem_id, attempt)`` to a previously
+        saved incomplete result.  When present, the saved conversation history
+        and partial response are threaded into the prover so it resumes from
+        where the prior run left off.
         """
         cfg = self.cfg
+        incomplete_map = incomplete_map or {}
 
         # Records with status != "success" or missing fields are passed through
         # immediately without running the prover.
@@ -407,6 +478,7 @@ class ProveFormalizationsScheduler:
                 "negated_lean": None,
                 "proved": False,
                 "disproved": False,
+                "incomplete": False,
                 "proof_result": None,
                 "disproof_result": None,
                 "skipped": True,
@@ -420,6 +492,7 @@ class ProveFormalizationsScheduler:
             problem_id = rec.get("problem_id", 0)
             attempt = rec.get("attempt", 0)
             base_seed = hash((problem_id, attempt)) & 0x7FFFFFFF
+            saved = incomplete_map.get((problem_id, attempt))
 
             if cfg.enable_parallel_disproof:
                 assert self._disproof_agent is not None
@@ -434,6 +507,8 @@ class ProveFormalizationsScheduler:
                     disproof_retries=cfg.disproof_retries,
                     base_seed=base_seed,
                     event_logger=self.event_logger,
+                    token_limit=cfg.limit_prover_tokens,
+                    incomplete_result=saved,
                 )
             elif cfg.enable_sequential_disproof:
                 assert self._disproof_agent is not None
@@ -448,6 +523,8 @@ class ProveFormalizationsScheduler:
                     disproof_retries=cfg.disproof_retries,
                     base_seed=base_seed,
                     event_logger=self.event_logger,
+                    token_limit=cfg.limit_prover_tokens,
+                    incomplete_result=saved,
                 )
             else:
                 return process_record_sequential(
@@ -457,6 +534,8 @@ class ProveFormalizationsScheduler:
                     proof_retries=cfg.proof_retries,
                     base_seed=base_seed,
                     event_logger=self.event_logger,
+                    token_limit=cfg.limit_prover_tokens,
+                    incomplete_result=saved,
                 )
 
         with ThreadPoolExecutor(max_workers=outer_workers) as pool:

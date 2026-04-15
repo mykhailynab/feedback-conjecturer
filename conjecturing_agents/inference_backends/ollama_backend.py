@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import time
 import ollama
-from typing import Iterator
+import threading
+from typing import Iterator, Optional
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 
@@ -148,7 +149,12 @@ class OllamaBackend(RawBackend):
             generated_tokens=generated_tokens,
         )
 
-    def generate_streaming(self, prompt: str, cfg: RawGenerationConfig) -> Iterator[str]:
+    def generate_streaming(
+        self,
+        prompt: str,
+        cfg: RawGenerationConfig,
+        stop_event: Optional[threading.Event] = None,
+    ) -> Iterator[str]:
         client = self._get_client()
         options = self._build_options(cfg)
 
@@ -166,6 +172,7 @@ class OllamaBackend(RawBackend):
         first_chunk = True
         output_chars = 0
         last_part = None
+        stopped_early = False
         for part in client.generate(
             model=self.cfg.model,
             prompt=prompt,
@@ -173,6 +180,9 @@ class OllamaBackend(RawBackend):
             stream=True,
         ):
             last_part = part
+            if stop_event is not None and stop_event.is_set():
+                stopped_early = True
+                break
             chunk = part.response
             if chunk:
                 if first_chunk:
@@ -185,8 +195,9 @@ class OllamaBackend(RawBackend):
                     print(chunk, end="", flush=True)
                 yield chunk
 
-        prompt_tokens = last_part.prompt_eval_count
-        generated_tokens = last_part.eval_count
+        # Token counts are only accurate when the stream ran to completion.
+        prompt_tokens = last_part.prompt_eval_count if last_part is not None and not stopped_early else None
+        generated_tokens = last_part.eval_count if last_part is not None and not stopped_early else None
 
         self._log_event("raw_generation_done", {
             "elapsed_ms": int((time.time() - t0) * 1000),

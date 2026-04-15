@@ -16,6 +16,7 @@ Design contract
 """
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, Optional
@@ -89,8 +90,13 @@ class RawBackend(ABC):
         self,
         prompt: str,
         cfg: RawGenerationConfig,
+        stop_event: Optional[threading.Event] = None,
     ) -> Iterator[str]:
-        """Yield text chunks as they arrive from the model."""
+        """Yield text chunks as they arrive from the model.
+
+        If ``stop_event`` is provided, the implementation should check it
+        between chunks and stop yielding as soon as it is set.
+        """
 
     @abstractmethod
     def count_tokens(self, text: str) -> int:

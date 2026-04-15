@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from conjecturing_agents.lean_regex import (
     BY_CLAUSE_RE,
+    extract_lean_code_block,
 )
 
 
@@ -150,3 +151,11 @@ def format_lean_errors(
         err_str += f"\n... [Omitted {len(errors) - max_errors} more errors] ...\n"
 
     return err_str
+
+
+__all__ = [
+    "extract_lean_code_block",
+    "format_lean_errors",
+    "normalize_for_prompt",
+    "replace_statement_in_proof",
+]

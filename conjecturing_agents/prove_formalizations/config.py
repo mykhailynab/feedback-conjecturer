@@ -69,6 +69,12 @@ class ProveFormalizationsConfig:
     goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
     goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"
 
+    # Progressive token budget.
+    # Stop each prover session when its rendered prompt reaches this many
+    # tokens.  0 = unlimited.  Use --continue with a higher value to resume
+    # sessions that were cut off.
+    limit_prover_tokens: int = 0
+
     # Logging / debug
     print_agent_conv: bool = False
 
@@ -467,6 +473,16 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         help="HF tokenizer path for exact token counting.",
     )
     p.add_argument(
+        "--limit-prover-tokens",
+        type=int,
+        default=ProveFormalizationsConfig.limit_prover_tokens,
+        help=(
+            "Stop each prover session when its rendered prompt reaches this many tokens. "
+            "0 = unlimited. Use --continue with a higher value to resume sessions that "
+            "were cut off, extending the budget progressively (e.g. 4000 → 8000 → 40960)."
+        ),
+    )
+    p.add_argument(
         "--print-agent-conv",
         dest="print_agent_conv",
         action="store_true",
@@ -557,6 +573,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         goedel_vllm_enable_prefix_caching=args.goedel_vllm_enable_prefix_caching,
         goedel_vllm_extra_server_args=args.goedel_vllm_extra_server_args or [],
         goedel_tokenizer_path=args.goedel_tokenizer_path,
+        limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,
         max_records=args.max_records,

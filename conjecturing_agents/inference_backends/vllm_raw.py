@@ -249,7 +249,12 @@ class VLLMRawBackend(RawBackend):
             generated_tokens=generated_tokens,
         )
 
-    def generate_streaming(self, prompt: str, cfg: RawGenerationConfig) -> Iterator[str]:
+    def generate_streaming(
+        self,
+        prompt: str,
+        cfg: RawGenerationConfig,
+        stop_event: Optional[threading.Event] = None,
+    ) -> Iterator[str]:
         if not self._started:
             self.start()
 
@@ -277,6 +282,8 @@ class VLLMRawBackend(RawBackend):
         output_chars = 0
         try:
             for chunk in stream:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 text = chunk.choices[0].text or ""
                 if text:
                     if first_chunk:

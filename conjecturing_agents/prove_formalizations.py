@@ -23,9 +23,8 @@ from __future__ import annotations
 
 import json
 import threading
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from tqdm import tqdm
 
@@ -41,6 +40,10 @@ def _record_key(r: Dict[str, Any]) -> Tuple[Any, Any]:
 
 def _is_decided(r: Dict[str, Any]) -> bool:
     return bool(r.get("proved")) or bool(r.get("disproved"))
+
+
+def _is_incomplete(r: Dict[str, Any]) -> bool:
+    return bool(r.get("incomplete")) and not _is_decided(r)
 
 
 def main() -> None:
@@ -75,6 +78,7 @@ def main() -> None:
         event_logger.log_event(event_type, payload)
 
     decided_results: List[Dict[str, Any]] = []
+    incomplete_map: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
     records_to_run = records
 
     if cfg.resume:
@@ -82,16 +86,19 @@ def main() -> None:
         if existing_path.exists():
             existing = load_jsonl(existing_path)
             decided_results = [r for r in existing if _is_decided(r)]
-            undecided_keys = {_record_key(r) for r in existing if not _is_decided(r)}
-            existing_keys = {_record_key(r) for r in existing}
-            records_to_run = [
-                r for r in records
-                if _record_key(r) in undecided_keys or _record_key(r) not in existing_keys
-            ]
+            decided_keys = {_record_key(r) for r in decided_results}
+            # subset of records_to_run that's incomplete
+            incomplete_map = {
+                _record_key(r): r for r in existing if _is_incomplete(r)
+            }
+            records_to_run = [r for r in records if _record_key(r) not in decided_keys]
             if cfg.verbose:
+                n_incomplete = len(incomplete_map)
+                n_fresh = len(records_to_run) - n_incomplete
                 print(
                     f"Loaded {len(existing)} existing results from {output_path}: "
-                    f"{len(decided_results)} decided, {len(records_to_run)} to re-run"
+                    f"{len(decided_results)} decided, {n_incomplete} incomplete (resuming), "
+                    f"{n_fresh} new"
                 )
 
     total = len(records_to_run)
@@ -164,7 +171,7 @@ def main() -> None:
             progress.update(1)
 
         with ProveFormalizationsScheduler(cfg, event_logger=_intercepted_event_logger) as scheduler:
-            scheduler.run(records_to_run, on_result=on_result)
+            scheduler.run(records_to_run, on_result=on_result, incomplete_map=incomplete_map)
 
     progress.close()
 
