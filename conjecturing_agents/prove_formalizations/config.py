@@ -49,6 +49,12 @@ class ProveFormalizationsConfig:
     goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
     goedel_ollama_model: str = "goedel-v2:latest"
     goedel_ollama_host: str = "http://localhost:11434"
+    # Multiple Ollama hosts for load-balanced multi-GPU setups.
+    # When non-empty, overrides goedel_ollama_host and distributes requests
+    # across all listed hosts with at most goedel_ollama_max_concurrent
+    # concurrent requests per host.
+    goedel_ollama_hosts: List[str] = field(default_factory=list)
+    goedel_ollama_max_concurrent: int = 6
     goedel_ollama_client_timeout: int = 3600
     goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
     goedel_vllm_model_name: str = "goedel"
@@ -157,7 +163,12 @@ def make_goedel_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: 
 
 
 def make_goedel_backend(cfg: ProveFormalizationsConfig):
-    """Instantiate the appropriate ``RawBackend`` for the Goedel prover."""
+    """Instantiate the appropriate ``RawBackend`` for the Goedel prover.
+
+    When ``goedel_ollama_hosts`` is non-empty (Ollama backend only), returns a
+    ``LoadBalancedRawBackend`` that distributes requests across all listed hosts
+    with at most ``goedel_ollama_max_concurrent`` concurrent requests per host.
+    """
     if cfg.goedel_backend_type == "vllm":
         from conjecturing_agents.inference_backends.vllm_raw import (
             VLLMRawBackend,
@@ -184,17 +195,35 @@ def make_goedel_backend(cfg: ProveFormalizationsConfig):
             enable_prefix_caching=cfg.goedel_vllm_enable_prefix_caching,
             extra_server_args=cfg.goedel_vllm_extra_server_args,
         ))
-    else:
-        from conjecturing_agents.inference_backends.ollama_backend import (
-            OllamaBackend,
-            OllamaConfig,
+
+    from conjecturing_agents.inference_backends.ollama_backend import (
+        OllamaBackend,
+        OllamaConfig,
+    )
+
+    if cfg.goedel_ollama_hosts:
+        from conjecturing_agents.inference_backends.load_balanced_backend import (
+            LoadBalancedRawBackend,
         )
-        return OllamaBackend(OllamaConfig(
-            model=cfg.goedel_ollama_model,
-            host=cfg.goedel_ollama_host,
-            client_timeout=cfg.goedel_ollama_client_timeout,
-            tokenizer_path=cfg.goedel_tokenizer_path,
-        ))
+        sub_backends = [
+            OllamaBackend(OllamaConfig(
+                model=cfg.goedel_ollama_model,
+                host=host,
+                client_timeout=cfg.goedel_ollama_client_timeout,
+                tokenizer_path=cfg.goedel_tokenizer_path,
+            ))
+            for host in cfg.goedel_ollama_hosts
+        ]
+        return LoadBalancedRawBackend(
+            [(b, cfg.goedel_ollama_max_concurrent) for b in sub_backends]
+        )
+
+    return OllamaBackend(OllamaConfig(
+        model=cfg.goedel_ollama_model,
+        host=cfg.goedel_ollama_host,
+        client_timeout=cfg.goedel_ollama_client_timeout,
+        tokenizer_path=cfg.goedel_tokenizer_path,
+    ))
 
 
 # ============================================================
@@ -363,7 +392,29 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
     p.add_argument(
         "--goedel-ollama-host",
         default=ProveFormalizationsConfig.goedel_ollama_host,
-        help="Ollama server URL (backend=ollama).",
+        help="Ollama server URL (backend=ollama). Ignored when --goedel-ollama-hosts is set.",
+    )
+    p.add_argument(
+        "--goedel-ollama-hosts",
+        nargs="+",
+        default=[],
+        metavar="URL",
+        help=(
+            "Multiple Ollama server URLs for load-balanced multi-GPU inference "
+            "(backend=ollama). Requests are distributed across all hosts with at "
+            "most --goedel-ollama-max-concurrent requests per host. "
+            "Example: --goedel-ollama-hosts http://localhost:11434 http://localhost:11435"
+        ),
+    )
+    p.add_argument(
+        "--goedel-ollama-max-concurrent",
+        type=int,
+        default=ProveFormalizationsConfig.goedel_ollama_max_concurrent,
+        help=(
+            "Maximum concurrent requests per Ollama host when using "
+            "--goedel-ollama-hosts. Should match OLLAMA_NUM_PARALLEL on each server. "
+            "Default: %(default)s."
+        ),
     )
     p.add_argument(
         "--goedel-ollama-client-timeout",
@@ -554,6 +605,8 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         goedel_backend_type=args.goedel_backend_type,
         goedel_ollama_model=args.goedel_ollama_model,
         goedel_ollama_host=args.goedel_ollama_host,
+        goedel_ollama_hosts=args.goedel_ollama_hosts or [],
+        goedel_ollama_max_concurrent=args.goedel_ollama_max_concurrent,
         goedel_ollama_client_timeout=args.goedel_ollama_client_timeout,
         goedel_vllm_base_url=args.goedel_vllm_base_url,
         goedel_vllm_model_name=args.goedel_vllm_model_name,

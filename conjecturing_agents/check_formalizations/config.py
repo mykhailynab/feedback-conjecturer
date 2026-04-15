@@ -44,6 +44,12 @@ class CheckFormalizationsConfig:
     goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
     goedel_ollama_model: str = "goedel-v2:latest"
     goedel_ollama_host: str = "http://localhost:11434"
+    # Multiple Ollama hosts for load-balanced multi-GPU setups.
+    # When non-empty, overrides goedel_ollama_host and distributes requests
+    # across all listed hosts with at most goedel_ollama_max_concurrent
+    # concurrent requests per host.
+    goedel_ollama_hosts: List[str] = field(default_factory=list)
+    goedel_ollama_max_concurrent: int = 6
     goedel_ollama_client_timeout: int = 1200
     goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
     goedel_vllm_model_name: str = "goedel"
@@ -318,7 +324,29 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
     p.add_argument(
         "--goedel-ollama-host",
         default=CheckFormalizationsConfig.goedel_ollama_host,
-        help="Ollama server URL (backend=ollama).",
+        help="Ollama server URL (backend=ollama). Ignored when --goedel-ollama-hosts is set.",
+    )
+    p.add_argument(
+        "--goedel-ollama-hosts",
+        nargs="+",
+        default=[],
+        metavar="URL",
+        help=(
+            "Multiple Ollama server URLs for load-balanced multi-GPU inference "
+            "(backend=ollama). When set, requests are distributed across all hosts "
+            "with at most --goedel-ollama-max-concurrent requests per host. "
+            "Example: --goedel-ollama-hosts http://localhost:11434 http://localhost:11435"
+        ),
+    )
+    p.add_argument(
+        "--goedel-ollama-max-concurrent",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_ollama_max_concurrent,
+        help=(
+            "Maximum concurrent requests per Ollama host when using "
+            "--goedel-ollama-hosts. Should match OLLAMA_NUM_PARALLEL on each server. "
+            "Default: %(default)s."
+        ),
     )
     p.add_argument(
         "--goedel-ollama-client-timeout",
@@ -502,6 +530,8 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         goedel_backend_type=args.goedel_backend_type,
         goedel_ollama_model=args.goedel_ollama_model,
         goedel_ollama_host=args.goedel_ollama_host,
+        goedel_ollama_hosts=args.goedel_ollama_hosts or [],
+        goedel_ollama_max_concurrent=args.goedel_ollama_max_concurrent,
         goedel_ollama_client_timeout=args.goedel_ollama_client_timeout,
         goedel_vllm_base_url=args.goedel_vllm_base_url,
         goedel_vllm_model_name=args.goedel_vllm_model_name,

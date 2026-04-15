@@ -414,7 +414,12 @@ class ProveFormalizationsScheduler:
         self.cfg = cfg
         self.event_logger = event_logger
 
-        # Build proof agent (always needed)
+        # Build proof agent (always needed).
+        # A single backend is shared with the disproof agent (when active) so
+        # that per-GPU concurrency limits are enforced globally across both
+        # directions.  This matters most for LoadBalancedRawBackend: creating
+        # two independent instances would double the effective slot capacity and
+        # over-subscribe GPUs in parallel-disproof mode.
         goedel_proof_cfg = make_goedel_prover_config(cfg, workspace_suffix="proof")
         self._proof_agent = GoedelProverAgent(goedel_proof_cfg)
         self._proof_backend = make_goedel_backend(cfg)
@@ -424,17 +429,14 @@ class ProveFormalizationsScheduler:
         if event_logger is not None:
             self._proof_backend.set_event_logger(event_logger)
 
-        # Build disproof agent (when either disproof mode is active)
+        # Build disproof agent (when either disproof mode is active).
+        # Re-use the same backend object — do NOT call make_goedel_backend again.
         self._disproof_agent: Optional[GoedelProverAgent] = None
         self._disproof_backend: Optional[RawBackend] = None
         if cfg.enable_parallel_disproof or cfg.enable_sequential_disproof:
             goedel_disproof_cfg = make_goedel_prover_config(cfg, workspace_suffix="disproof")
             self._disproof_agent = GoedelProverAgent(goedel_disproof_cfg)
-            self._disproof_backend = make_goedel_backend(cfg)
-            if cfg.print_agent_conv:
-                self._disproof_backend.set_verbose(True)
-            if event_logger is not None:
-                self._disproof_backend.set_event_logger(event_logger)
+            self._disproof_backend = self._proof_backend  # shared
 
     def run(
         self,
@@ -560,8 +562,7 @@ class ProveFormalizationsScheduler:
         self._proof_backend.close()
         if self._disproof_agent is not None:
             self._disproof_agent.close()
-        if self._disproof_backend is not None:
-            self._disproof_backend.close()
+        # _disproof_backend is the same object as _proof_backend — already closed above.
 
     def __enter__(self) -> "ProveFormalizationsScheduler":
         return self

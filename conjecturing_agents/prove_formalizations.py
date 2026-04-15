@@ -106,6 +106,12 @@ def main() -> None:
     if cfg.verbose:
         print(f"Processing {total} records from {cfg.formalizations_path}")
         print(f"Output: {output_path}")
+        if cfg.goedel_ollama_hosts:
+            print(
+                f"Load-balanced Ollama backend: {len(cfg.goedel_ollama_hosts)} hosts, "
+                f"max {cfg.goedel_ollama_max_concurrent} concurrent per host "
+                f"(total capacity: {len(cfg.goedel_ollama_hosts) * cfg.goedel_ollama_max_concurrent})"
+            )
         if cfg.enable_parallel_disproof:
             outer = max(1, cfg.parallelism // 2)
             print(f"Mode: parallel proof+disproof ({outer} outer workers * 2 sub-threads)")

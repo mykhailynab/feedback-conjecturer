@@ -93,6 +93,37 @@ def main() -> None:
         if event_logger is not None:
             event_logger.log_event(event_type, payload)
 
+    # Build a shared load-balanced backend when multiple Ollama hosts are given.
+    # The backend is shared across all AnswerChecker instances so that the
+    # per-host concurrency limits are enforced globally.
+    shared_goedel_backend = None
+    if checker_cfg.use_goedel_prover and cfg.goedel_ollama_hosts:
+        from conjecturing_agents.inference_backends.ollama_backend import (
+            OllamaBackend,
+            OllamaConfig,
+        )
+        from conjecturing_agents.inference_backends.load_balanced_backend import (
+            LoadBalancedRawBackend,
+        )
+        sub_backends = [
+            OllamaBackend(OllamaConfig(
+                model=checker_cfg.goedel_ollama_model,
+                host=host,
+                client_timeout=checker_cfg.goedel_ollama_client_timeout,
+                tokenizer_path=checker_cfg.goedel_tokenizer_path,
+            ))
+            for host in cfg.goedel_ollama_hosts
+        ]
+        shared_goedel_backend = LoadBalancedRawBackend(
+            [(b, cfg.goedel_ollama_max_concurrent) for b in sub_backends]
+        )
+        if cfg.verbose:
+            print(
+                f"Load-balanced Ollama backend: {len(cfg.goedel_ollama_hosts)} hosts, "
+                f"max {cfg.goedel_ollama_max_concurrent} concurrent per host "
+                f"(total capacity: {len(cfg.goedel_ollama_hosts) * cfg.goedel_ollama_max_concurrent})"
+            )
+
     decided_results: List[Dict[str, Any]] = []
     records_to_check = records
 
@@ -126,6 +157,7 @@ def main() -> None:
         return AnswerChecker(
             checker_cfg,
             event_logger=_log_event_intercepted,
+            goedel_backend=shared_goedel_backend,
         )
 
     # Summary counters (decided records already counted in)
@@ -231,6 +263,9 @@ def main() -> None:
                     print(f"  {done}/{total} done")
 
         progress.close()
+
+    if shared_goedel_backend is not None:
+        shared_goedel_backend.close()
 
     all_results = decided_results + all_new_results
     success_records = [r for r in all_results if r.get("status") == "success"]

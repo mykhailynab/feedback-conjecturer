@@ -100,18 +100,30 @@ class AnswerChecker:
     Stops as soon as any heuristic returns a conclusive result (equivalent != None).
     Heuristic 4 only runs when use_goedel_disprover=True and heuristic 3 was
     inconclusive.
+
+    Parameters
+    ----------
+    goedel_backend:
+        Optional pre-built ``RawBackend`` to use for the Goedel heuristics.
+        When provided, ``AnswerCheckerConfig.goedel_backend_type`` and related
+        Ollama / vLLM config fields are ignored for backend construction.
+        Pass a shared ``LoadBalancedRawBackend`` here to spread requests
+        across multiple inference servers.
     """
 
     def __init__(
         self,
         cfg: Optional[AnswerCheckerConfig] = None,
         event_logger: Optional[EventLoggerFn] = None,
+        goedel_backend=None,
     ):
         self.cfg = cfg or AnswerCheckerConfig()
         self._event_logger = event_logger
         self._compiler: Optional[Lean4CompilerBackend] = None
         self._goedel_agent = None
-        self._goedel_backend = None
+        # If an external backend is injected, use it; do not close it on close().
+        self._goedel_backend = goedel_backend
+        self._owns_goedel_backend = goedel_backend is None
 
     # ------------------------------------------------------------------
     # Lean compiler — lazy init (heuristic 2)
@@ -162,48 +174,51 @@ class AnswerChecker:
             )
             self._goedel_agent = GoedelProverAgent(goedel_cfg)
 
-            if self.cfg.goedel_backend_type == "vllm":
-                from conjecturing_agents.inference_backends.vllm_raw import (
-                    VLLMRawBackend,
-                    VLLMRawConfig,
-                )
-                self._goedel_backend = VLLMRawBackend(VLLMRawConfig(
-                    base_url=self.cfg.goedel_vllm_base_url,
-                    served_model_name=self.cfg.goedel_vllm_model_name,
-                    api_key=self.cfg.goedel_vllm_api_key,
-                    client_timeout=self.cfg.goedel_vllm_client_timeout,
-                    tokenizer_path=self.cfg.goedel_tokenizer_path,
-                    manage_server=self.cfg.goedel_vllm_manage_server,
-                    model_path=self.cfg.goedel_vllm_model_path,
-                    port=self.cfg.goedel_vllm_port,
-                    host=self.cfg.goedel_vllm_host,
-                    server_timeout=self.cfg.goedel_vllm_server_timeout,
-                    server_log_path=self.cfg.goedel_vllm_server_log_path,
-                    dtype=self.cfg.goedel_vllm_dtype,
-                    kv_cache_dtype=self.cfg.goedel_vllm_kv_cache_dtype,
-                    context_tokens=self.cfg.goedel_context_tokens,
-                    gpu_memory_utilization=self.cfg.goedel_vllm_gpu_memory_utilization,
-                    max_num_seqs=self.cfg.goedel_vllm_max_num_seqs,
-                    stream_interval=self.cfg.goedel_vllm_stream_interval,
-                    enable_prefix_caching=self.cfg.goedel_vllm_enable_prefix_caching,
-                    extra_server_args=self.cfg.goedel_vllm_extra_server_args,
-                ))
-            else:
-                from conjecturing_agents.inference_backends.ollama_backend import (
-                    OllamaBackend,
-                    OllamaConfig,
-                )
-                self._goedel_backend = OllamaBackend(OllamaConfig(
-                    model=self.cfg.goedel_ollama_model,
-                    host=self.cfg.goedel_ollama_host,
-                    client_timeout=self.cfg.goedel_ollama_client_timeout,
-                    tokenizer_path=self.cfg.goedel_tokenizer_path,
-                ))
+            # Only build a backend if one was not injected via __init__.
+            if self._goedel_backend is None:
+                if self.cfg.goedel_backend_type == "vllm":
+                    from conjecturing_agents.inference_backends.vllm_raw import (
+                        VLLMRawBackend,
+                        VLLMRawConfig,
+                    )
+                    self._goedel_backend = VLLMRawBackend(VLLMRawConfig(
+                        base_url=self.cfg.goedel_vllm_base_url,
+                        served_model_name=self.cfg.goedel_vllm_model_name,
+                        api_key=self.cfg.goedel_vllm_api_key,
+                        client_timeout=self.cfg.goedel_vllm_client_timeout,
+                        tokenizer_path=self.cfg.goedel_tokenizer_path,
+                        manage_server=self.cfg.goedel_vllm_manage_server,
+                        model_path=self.cfg.goedel_vllm_model_path,
+                        port=self.cfg.goedel_vllm_port,
+                        host=self.cfg.goedel_vllm_host,
+                        server_timeout=self.cfg.goedel_vllm_server_timeout,
+                        server_log_path=self.cfg.goedel_vllm_server_log_path,
+                        dtype=self.cfg.goedel_vllm_dtype,
+                        kv_cache_dtype=self.cfg.goedel_vllm_kv_cache_dtype,
+                        context_tokens=self.cfg.goedel_context_tokens,
+                        gpu_memory_utilization=self.cfg.goedel_vllm_gpu_memory_utilization,
+                        max_num_seqs=self.cfg.goedel_vllm_max_num_seqs,
+                        stream_interval=self.cfg.goedel_vllm_stream_interval,
+                        enable_prefix_caching=self.cfg.goedel_vllm_enable_prefix_caching,
+                        extra_server_args=self.cfg.goedel_vllm_extra_server_args,
+                    ))
+                else:
+                    from conjecturing_agents.inference_backends.ollama_backend import (
+                        OllamaBackend,
+                        OllamaConfig,
+                    )
+                    self._goedel_backend = OllamaBackend(OllamaConfig(
+                        model=self.cfg.goedel_ollama_model,
+                        host=self.cfg.goedel_ollama_host,
+                        client_timeout=self.cfg.goedel_ollama_client_timeout,
+                        tokenizer_path=self.cfg.goedel_tokenizer_path,
+                    ))
+                self._owns_goedel_backend = True
 
-            if self.cfg.goedel_print_agent_conv:
-                self._goedel_backend.set_verbose(True)
-            if self._event_logger is not None:
-                self._goedel_backend.set_event_logger(self._event_logger)
+                if self.cfg.goedel_print_agent_conv:
+                    self._goedel_backend.set_verbose(True)
+                if self._event_logger is not None:
+                    self._goedel_backend.set_event_logger(self._event_logger)
 
         return self._goedel_agent, self._goedel_backend
 
@@ -334,7 +349,7 @@ class AnswerChecker:
         }
 
     def close(self) -> None:
-        if self._goedel_backend is not None:
+        if self._goedel_backend is not None and self._owns_goedel_backend:
             self._goedel_backend.close()
 
     def __enter__(self) -> "AnswerChecker":
