@@ -244,7 +244,7 @@ def load_goedel_sessions(goedel_events_path: str) -> List[ProverSession]:
             start_ts=start_evt.get("ts", ""),
             theorem_proved=done_evt.get("proved") if done_evt else None,
             termination_reason=done_evt.get("termination_reason") if done_evt else None,
-            rounds_used=done_evt.get("rounds_used") if done_evt else None,
+            rounds_used=done_evt.get("rounds_used") if done_evt else (len(rounds) if rounds else None),
             elapsed_ms=done_evt.get("elapsed_ms") if done_evt else None,
             done_ts=done_evt.get("ts") if done_evt else None,
             rounds=rounds,
@@ -619,37 +619,36 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
             count = round_counts[n_rounds]
             bar = "█" * int(count / max_count * 40)
             lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
+
+    # Round distribution (incomplete proof sessions)
+    if incomplete_proofs:
+        lines.append("")
+        lines.append(bold("  Rounds used (incomplete proof sessions)"))
+        lines.append(hline("─"))
+        round_counts: Dict[int, int] = defaultdict(int)
+        for s in incomplete_proofs:
+            round_counts[s.rounds_used or 0] += 1
+        max_count = max(reason_counts.values())
+        for n_rounds in sorted(round_counts):
+            label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
+            count = round_counts[n_rounds]
+            bar = "█" * int(count / max_count * 40)
+            lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
     
-    # TODO: parse rounds for this
-    # # Round distribution (incomplete proof sessions)
-    # if incomplete_proofs:
-    #     lines.append("")
-    #     lines.append(bold("  Rounds used (incomplete proof sessions)"))
-    #     lines.append(hline("─"))
-    #     round_counts: Dict[int, int] = defaultdict(int)
-    #     for s in incomplete_proofs:
-    #         round_counts[s.rounds_used or 0] += 1
-    #     max_count = max(reason_counts.values())
-    #     for n_rounds in sorted(round_counts):
-    #         label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
-    #         count = round_counts[n_rounds]
-    #         bar = "█" * int(count / max_count * 40)
-    #         lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
-    
-    # # Round distribution (incomplete disproof sessions)
-    # if incomplete_disproofs:
-    #     lines.append("")
-    #     lines.append(bold("  Rounds used (incomplete disproof sessions)"))
-    #     lines.append(hline("─"))
-    #     round_counts: Dict[int, int] = defaultdict(int)
-    #     for s in incomplete_disproofs:
-    #         round_counts[s.rounds_used or 0] += 1
-    #     max_count = max(reason_counts.values())
-    #     for n_rounds in sorted(round_counts):
-    #         label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
-    #         count = round_counts[n_rounds]
-    #         bar = "█" * int(count / max_count * 40)
-    #         lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
+    # Round distribution (incomplete disproof sessions)
+    if incomplete_disproofs:
+        lines.append("")
+        lines.append(bold("  Rounds used (incomplete disproof sessions)"))
+        lines.append(hline("─"))
+        round_counts: Dict[int, int] = defaultdict(int)
+        for s in incomplete_disproofs:
+            round_counts[s.rounds_used or 0] += 1
+        max_count = max(reason_counts.values())
+        for n_rounds in sorted(round_counts):
+            label = f"{n_rounds} round{'s' if n_rounds != 1 else ''}"
+            count = round_counts[n_rounds]
+            bar = "█" * int(count / max_count * 40)
+            lines.append(f"  {label:<35} {count:>4}  {dim(bar)}")
 
     # Timing
     times = [s.elapsed_ms for s in complete if s.elapsed_ms is not None]
