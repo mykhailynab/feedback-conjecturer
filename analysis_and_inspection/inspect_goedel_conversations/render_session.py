@@ -1,7 +1,7 @@
 """Renders a single ProverSession as a multi-turn conversation transcript."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from analysis_and_inspection.display_utils import (
     WIDTH,
@@ -42,7 +42,7 @@ def _lean_status_str(rnd: ProverRound) -> str:
 
 def render_session(
     sess: ProverSession,
-    check_result: Optional[Dict],
+    result_summary: Optional[str] = None,
     *,
     max_output_chars: int = 3000,
     no_truncate: bool = False,
@@ -68,11 +68,8 @@ def render_session(
     else:
         lines.append(f"  {dim('(incomplete — no session_done event recorded)')}")
 
-    if check_result:
-        eq = check_result.get("equivalent")
-        method = check_result.get("method", "?")
-        eq_str = green("True") if eq is True else (red("False") if eq is False else yellow("None"))
-        lines.append(f"  check_result: equivalent={eq_str}  method={dim(method)}")
+    if result_summary:
+        lines.append(f"  {result_summary}")
 
     lines.append("═" * WIDTH)
 

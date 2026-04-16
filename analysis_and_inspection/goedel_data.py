@@ -10,6 +10,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from analysis_and_inspection.display_utils import green, red, yellow, dim
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -46,6 +47,10 @@ class ProverSession:
     done_ts: Optional[str]
     # Rounds
     rounds: List[ProverRound] = field(default_factory=list)
+    # prove_formalizations only (0 for check_formalizations sessions)
+    retry: int = 0
+    # token_limit set for this session (0 = unlimited); prove_formalizations only
+    token_limit: int = 0
 
     @property
     def complete(self) -> bool:
@@ -62,7 +67,6 @@ class ProverSession:
 
     @property
     def outcome_color(self):
-        from display_utils import green, red, yellow, dim
         o = self.outcome
         if o == "proved":
             return green
@@ -176,6 +180,96 @@ def load_goedel_sessions(goedel_events_path: str) -> List[ProverSession]:
 
     sessions.sort(key=lambda s: s.start_ts)
     return sessions
+
+
+def load_prove_sessions(goedel_events_path: str) -> List[ProverSession]:
+    """
+    Build ProverSession objects from prove_goedel_events.jsonl.
+
+    Groups events by (problem_id, attempt, direction, retry).
+    The ``checking`` field is populated from ``direction`` ("proof"/"disproof").
+    """
+    events: List[Dict[str, Any]] = []
+    with open(goedel_events_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+
+    by_key: Dict[Tuple, List[Dict]] = defaultdict(list)
+    for e in events:
+        pid = e.get("problem_id")
+        att = e.get("attempt")
+        direction = e.get("direction", "proof")
+        retry = e.get("retry", 0)
+        evt = e.get("event")
+        if pid is None or att is None:
+            continue
+        if evt in ("prover_session_start", "prover_round_done", "prover_session_done"):
+            by_key[(pid, att, direction, retry)].append(e)
+
+    sessions: List[ProverSession] = []
+    for (pid, att, direction, retry), evts in by_key.items():
+        starts      = [e for e in evts if e["event"] == "prover_session_start"]
+        dones       = [e for e in evts if e["event"] == "prover_session_done"]
+        rounds_evts = [e for e in evts if e["event"] == "prover_round_done"]
+
+        if not starts:
+            continue
+
+        start_evt = starts[-1]
+        done_evt  = dones[-1] if dones else None
+
+        rounds = [
+            ProverRound(
+                round_idx=r.get("round", i),
+                prompt_text=r.get("prompt_text", ""),
+                raw_output=r.get("raw_output", ""),
+                lean_ok=r.get("lean_ok"),
+                lean_timed_out=r.get("lean_timed_out"),
+                lean_oom=r.get("lean_oom"),
+                lean_error_count=r.get("lean_error_count"),
+                elapsed_ms=r.get("elapsed_ms"),
+                termination_reason=r.get("termination_reason", ""),
+            )
+            for i, r in enumerate(rounds_evts)
+        ]
+        rounds.sort(key=lambda r: r.round_idx)
+
+        sess = ProverSession(
+            problem_id=pid,
+            attempt=att,
+            checking=direction,
+            theorem_statement=start_evt.get("theorem_statement", ""),
+            formal_statement=start_evt.get("formal_statement", ""),
+            seed=start_evt.get("seed", 0),
+            max_rounds=start_evt.get("max_rounds", 0),
+            start_ts=start_evt.get("ts", ""),
+            theorem_proved=done_evt.get("proved") if done_evt else None,
+            termination_reason=done_evt.get("termination_reason") if done_evt else None,
+            rounds_used=done_evt.get("rounds_used") if done_evt else (len(rounds) if rounds else None),
+            elapsed_ms=done_evt.get("elapsed_ms") if done_evt else None,
+            done_ts=done_evt.get("ts") if done_evt else None,
+            rounds=rounds,
+            retry=retry,
+            token_limit=start_evt.get("token_limit", 0),
+        )
+        sessions.append(sess)
+
+    sessions.sort(key=lambda s: s.start_ts)
+    return sessions
+
+
+def load_prove_results(results_path: str) -> Dict[Tuple, Dict]:
+    """Return a dict keyed by (problem_id, attempt) → prove_results record."""
+    out: Dict[Tuple, Dict] = {}
+    with open(results_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                r = json.loads(line)
+                out[(r.get("problem_id"), r.get("attempt"))] = r
+    return out
 
 
 def load_check_results(results_path: str) -> Dict[Tuple, Dict]:

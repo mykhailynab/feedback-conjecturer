@@ -22,10 +22,17 @@ from __future__ import annotations
 import sys
 import argparse
 
-from analysis_and_inspection.display_utils import bold, dim, set_color
+from analysis_and_inspection.display_utils import bold, dim, green, red, yellow, set_color
 from analysis_and_inspection.goedel_data import load_goedel_sessions, load_check_results, apply_filter, FILTER_CHOICES
 from analysis_and_inspection.inspect_goedel_conversations.render_session import render_session
 from analysis_and_inspection.inspect_goedel_conversations.render_stats import render_stats
+
+
+def _check_result_summary(cr: dict) -> str:
+    eq = cr.get("equivalent")
+    method = cr.get("method", "?")
+    eq_str = green("True") if eq is True else (red("False") if eq is False else yellow("None"))
+    return f"check_result: equivalent={eq_str}  method={dim(method)}"
 
 
 def main() -> None:
@@ -91,9 +98,10 @@ def main() -> None:
 
         for sess in to_display:
             cr = results.get((sess.problem_id, sess.attempt))
+            summary = _check_result_summary(cr) if cr else None
             print(render_session(
                 sess,
-                cr,
+                summary,
                 max_output_chars=args.max_output_chars,
                 no_truncate=args.no_truncate,
             ))
