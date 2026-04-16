@@ -261,6 +261,7 @@ class GoedelProverAgent:
                 rounds.append(round_record)
                 _log("prover_round_done", {
                     "round": round_idx,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_text": prompt,
                     "raw_output": "",
                     "lean_ok": None,
@@ -280,6 +281,7 @@ class GoedelProverAgent:
                 rounds.append(round_record)
                 _log("prover_round_done", {
                     "round": round_idx,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_text": prompt,
                     "raw_output": "",
                     "lean_ok": None,
@@ -324,6 +326,7 @@ class GoedelProverAgent:
                 rounds.append(round_record)
                 _log("prover_round_done", {
                     "round": round_idx,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_text": prompt,
                     "raw_output": raw_output,
                     "lean_ok": None,
@@ -352,6 +355,7 @@ class GoedelProverAgent:
                 rounds.append(round_record)
                 _log("prover_round_done", {
                     "round": round_idx,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_text": prompt,
                     "raw_output": raw_output,
                     "lean_ok": None,
@@ -381,6 +385,7 @@ class GoedelProverAgent:
                 rounds.append(round_record)
                 _log("prover_round_done", {
                     "round": round_idx,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_text": prompt,
                     "raw_output": raw_output,
                     "lean_ok": None,
@@ -406,6 +411,7 @@ class GoedelProverAgent:
             _lean_reason = "proved" if compile_result.ok else "lean_failed"
             _log("prover_round_done", {
                 "round": round_idx,
+                "prompt_tokens": prompt_tokens,
                 "prompt_text": prompt,
                 "raw_output": raw_output,
                 "lean_ok": compile_result.ok,
@@ -427,6 +433,7 @@ class GoedelProverAgent:
                     full_code,
                     all_errors,
                     truncate=self.cfg.truncate_errors,
+                    max_message_chars=self.cfg.max_error_message_chars,
                 )
                 messages = self._build_correction_messages(
                     messages,

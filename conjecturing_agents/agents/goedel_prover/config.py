@@ -37,6 +37,12 @@ class GoedelProverConfig:
     # Whether to truncate error lists to 8 (matches the default pipeline).
     truncate_errors: bool = True
 
+    # Maximum characters per individual error message (error['data']).
+    # Prevents tactics like interval_cases from producing thousands of
+    # unsolved-goal entries that blow up the correction prompt.
+    # 0 = no truncation.
+    max_error_message_chars: int = 0
+
 
 @dataclass
 class GoedelProverResult:

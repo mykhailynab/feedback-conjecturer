@@ -53,6 +53,7 @@ class AnswerCheckerConfig:
     goedel_repeat_penalty: float = 1.0
     goedel_context_tokens: int = 40960
     goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
+    goedel_max_error_message_chars: int = 0
 
     # "ollama" or "vllm"
     goedel_backend_type: str = "ollama"
@@ -171,6 +172,7 @@ class AnswerChecker:
                 repeat_penalty=self.cfg.goedel_repeat_penalty,
                 context_tokens=self.cfg.goedel_context_tokens,
                 lean=goedel_lean_cfg,
+                max_error_message_chars=self.cfg.goedel_max_error_message_chars,
             )
             self._goedel_agent = GoedelProverAgent(goedel_cfg)
 

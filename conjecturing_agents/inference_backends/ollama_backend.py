@@ -82,7 +82,15 @@ class OllamaBackend(RawBackend):
     def count_tokens(self, text: str) -> int:
         # add_special_tokens=False because text is already pre-rendered, so no
         # need to add new special tokens.
-        return len(self._get_tokenizer().encode(text, add_special_tokens=False))
+        tok = self._get_tokenizer()
+        n = len(tok.encode(text, add_special_tokens=False))
+        if n > tok.model_max_length:
+            self._log_event("count_tokens_overflow", {
+                "token_count": n,
+                "model_max_length": tok.model_max_length,
+                "text_chars": len(text),
+            })
+        return n
 
     # ------------------------------------------------------------------
     # Generation helpers

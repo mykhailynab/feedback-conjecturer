@@ -74,6 +74,7 @@ class ProveFormalizationsConfig:
     goedel_vllm_enable_prefix_caching: bool = True
     goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
     goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"
+    goedel_max_error_message_chars: int = 0
 
     # Progressive token budget.
     # Stop each prover session when its rendered prompt reaches this many
@@ -159,6 +160,7 @@ def make_goedel_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: 
         repeat_penalty=cfg.goedel_repeat_penalty,
         context_tokens=cfg.goedel_context_tokens,
         lean=lean_cfg,
+        max_error_message_chars=cfg.goedel_max_error_message_chars,
     )
 
 
@@ -524,6 +526,17 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         help="HF tokenizer path for exact token counting.",
     )
     p.add_argument(
+        "--goedel-max-error-message-chars",
+        type=int,
+        default=ProveFormalizationsConfig.goedel_max_error_message_chars,
+        help=(
+            "Truncate each Lean error message (error['data']) to this many characters "
+            "in the correction prompt. Prevents tactics like interval_cases from "
+            "producing thousands of unsolved-goal entries that blow up the context window. "
+            "0 = no truncation (default). Suggested value: 2000."
+        ),
+    )
+    p.add_argument(
         "--limit-prover-tokens",
         type=int,
         default=ProveFormalizationsConfig.limit_prover_tokens,
@@ -626,6 +639,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         goedel_vllm_enable_prefix_caching=args.goedel_vllm_enable_prefix_caching,
         goedel_vllm_extra_server_args=args.goedel_vllm_extra_server_args or [],
         goedel_tokenizer_path=args.goedel_tokenizer_path,
+        goedel_max_error_message_chars=args.goedel_max_error_message_chars,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

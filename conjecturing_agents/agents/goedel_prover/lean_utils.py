@@ -82,9 +82,15 @@ def format_lean_errors(
     errors: List[Dict[str, Any]],
     *,
     truncate: bool = True,
+    max_message_chars: int = 0,
 ) -> str:
     """
     Format Lean JSON errors with ``<error>...</error>`` markers.
+
+    ``max_message_chars`` caps the length of each individual ``error['data']``
+    string.  Tactics like ``interval_cases`` can produce thousands of
+    unsolved-goal entries that would blow up the context window; truncating
+    the message text prevents that.  0 = no truncation (default).
     """
     err_str = ""
     code_lines = code.split("\n")
@@ -153,7 +159,10 @@ def format_lean_errors(
 
         err_str += error_code
         err_str += "\n```\n"
-        err_str += f"\nError Message: {error.get('data', '')}\n"
+        msg = error.get('data', '')
+        if max_message_chars > 0 and len(msg) > max_message_chars:
+            msg = msg[:max_message_chars] + f"\n... [Truncated: {len(error.get('data','')) - max_message_chars} chars omitted] ..."
+        err_str += f"\nError Message: {msg}\n"
 
     if len(errors) > max_errors:
         err_str += f"\n... [Omitted {len(errors) - max_errors} more errors] ...\n"

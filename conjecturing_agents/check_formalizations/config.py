@@ -69,6 +69,7 @@ class CheckFormalizationsConfig:
     goedel_vllm_enable_prefix_caching: bool = True
     goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
     goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
+    goedel_max_error_message_chars: int = 0
 
     # Logging / debug
     print_agent_conv: bool = False
@@ -153,6 +154,7 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         goedel_vllm_enable_prefix_caching=cfg.goedel_vllm_enable_prefix_caching,
         goedel_vllm_extra_server_args=cfg.goedel_vllm_extra_server_args,
         goedel_tokenizer_path=cfg.goedel_tokenizer_path,
+        goedel_max_error_message_chars=cfg.goedel_max_error_message_chars,
         goedel_print_agent_conv=cfg.print_agent_conv,
     )
 
@@ -456,6 +458,17 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         help="HF tokenizer path for exact token counting (required when --goedel is set).",
     )
     p.add_argument(
+        "--goedel-max-error-message-chars",
+        type=int,
+        default=CheckFormalizationsConfig.goedel_max_error_message_chars,
+        help=(
+            "Truncate each Lean error message (error['data']) to this many characters "
+            "in the correction prompt. Prevents tactics like interval_cases from "
+            "producing thousands of unsolved-goal entries that blow up the context window. "
+            "0 = no truncation (default). Suggested value: 2000."
+        ),
+    )
+    p.add_argument(
         "--print-agent-conv",
         dest="print_agent_conv",
         action="store_true",
@@ -551,6 +564,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         goedel_vllm_enable_prefix_caching=args.goedel_vllm_enable_prefix_caching,
         goedel_vllm_extra_server_args=args.goedel_vllm_extra_server_args or [],
         goedel_tokenizer_path=args.goedel_tokenizer_path,
+        goedel_max_error_message_chars=args.goedel_max_error_message_chars,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,
         max_records=args.max_records,
