@@ -187,7 +187,7 @@ def make_backend(
     Returns VLLMHarmonyBackend (default) or OllamaChatBackend.
     """
     if cfg.backend_type == "ollama":
-        from conjecturing_agents.inference_backends.ollama_chat_backend import (
+        from conjecturing_agents.inference_backends.ollama_harmony import (
             OllamaChatBackend,
             OllamaChatConfig,
         )
