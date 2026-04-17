@@ -20,7 +20,8 @@ echo "Collecting files..."
 find \
     conjecturing_agents \
     logs/conjecture_formalization_logs_20mins \
-    goedel_prover_hf_tokenizer \
+    tokenizers \
+    templates \
     \( -name "__pycache__" -prune \) \
     -o \( \
         -type f \
@@ -62,9 +63,7 @@ zip conjecturing_agents_plus_references.zip \
 # Individual root-level files
 zip "$OUTPUT" \
     requirements.txt \
-    setup_remote.sh \
-    goedel_template.jinja \
-    goedel_formalizer_template.jinja
+    setup_remote.sh
 
 SIZE=$(du -sh "$OUTPUT" | cut -f1)
 COUNT=$(unzip -l "$OUTPUT" | tail -1 | awk '{print $2}')

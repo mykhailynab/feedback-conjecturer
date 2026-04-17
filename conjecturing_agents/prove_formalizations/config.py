@@ -38,7 +38,7 @@ class ProveFormalizationsConfig:
     disproof_retries: int = 1
 
     # Goedel prover settings
-    goedel_chat_template_path: str = "goedel_template.jinja"
+    goedel_chat_template_path: str = "templates/goedel_template.jinja"
     goedel_max_rounds: int = 2
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6

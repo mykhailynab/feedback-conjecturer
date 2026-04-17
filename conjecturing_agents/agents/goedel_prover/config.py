@@ -13,8 +13,8 @@ from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompile
 class GoedelProverConfig:
     name: str = "goedel_prover"
 
-    # Jinja2 chat template — path to file (e.g. goedel_template.jinja)
-    chat_template_path: str = "goedel_template.jinja"
+    # Jinja2 chat template — path to file (e.g. templates/goedel_template.jinja)
+    chat_template_path: str = "templates/goedel_template.jinja"
     enable_thinking: bool = True
 
     # Generation

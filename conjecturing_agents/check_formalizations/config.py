@@ -33,7 +33,7 @@ class CheckFormalizationsConfig:
     goedel_disproof_retries: int = 1
 
     # Goedel prover settings
-    goedel_chat_template_path: str = "goedel_template.jinja"
+    goedel_chat_template_path: str = "templates/goedel_template.jinja"
     goedel_max_rounds: int = 2
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6
@@ -68,7 +68,7 @@ class CheckFormalizationsConfig:
     goedel_vllm_stream_interval: int = 200
     goedel_vllm_enable_prefix_caching: bool = True
     goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
-    goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
+    goedel_tokenizer_path: str = "tokenizers/goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
     goedel_max_error_message_chars: int = 0
 
     # Logging / debug
