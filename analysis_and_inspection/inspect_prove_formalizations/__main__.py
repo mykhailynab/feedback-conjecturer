@@ -29,7 +29,7 @@ from analysis_and_inspection.goedel_data import (
     apply_filter,
     FILTER_CHOICES,
 )
-from analysis_and_inspection.inspect_goedel_conversations.render_session import render_session
+from analysis_and_inspection.render_session import render_session
 from analysis_and_inspection.inspect_prove_formalizations.render_stats import render_stats
 
 

@@ -24,8 +24,8 @@ import argparse
 
 from analysis_and_inspection.display_utils import bold, dim, green, red, yellow, set_color
 from analysis_and_inspection.goedel_data import load_goedel_sessions, load_check_results, apply_filter, FILTER_CHOICES
-from analysis_and_inspection.inspect_goedel_conversations.render_session import render_session
-from analysis_and_inspection.inspect_goedel_conversations.render_stats import render_stats
+from analysis_and_inspection.render_session import render_session
+from analysis_and_inspection.inspect_check_formalizations.render_stats import render_stats
 
 
 def _check_result_summary(cr: dict) -> str:
