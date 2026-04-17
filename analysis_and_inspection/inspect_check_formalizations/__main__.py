@@ -6,7 +6,7 @@ Reads check_goedel_events.jsonl and check_results.jsonl to display the full
 multi-turn conversation each session had, along with summary stats.
 
 Usage:
-    PYTHONPATH=analysis_and_inspection python -m inspect_goedel_conversations \\
+    PYTHONPATH=. python -m analysis_and_inspection.inspect_check_formalizations \\
         --goedel-events logs/.../check_goedel_events.jsonl \\
         --results       logs/.../check_results.jsonl \\
         [--filter  proof|disproof|proved|failed|disproved|incomplete] \\

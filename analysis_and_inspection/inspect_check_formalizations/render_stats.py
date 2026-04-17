@@ -327,11 +327,14 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     lines.append(dim(f"  Universe: {n_total_attempts} attempts across {n_problems} problems."))
     lines.append(dim(f"  Inferred k = {k_inferred} (most common attempts-per-problem)."))
     lines.append("")
-    lines.append(f"  {'pass@1  lower bound (proven correct):':<44} {green(f'{p1_lo:.2%}')}")
-    lines.append(f"  {'pass@1  upper bound (1 − proven wrong):':<44} {yellow(f'{p1_hi:.2%}')}")
+    n_p1_hi = n_total_attempts - n_eq_false_total
+    lines.append(f"  {'pass@1  lower bound (proven correct):':<44} {green(f'{p1_lo:.2%}')}  {dim(f'({n_eq_true_total}/{n_total_attempts} attempts)')}")
+    lines.append(f"  {'pass@1  upper bound (1 − proven wrong):':<44} {yellow(f'{p1_hi:.2%}')}  {dim(f'({n_p1_hi}/{n_total_attempts} attempts)')}")
     lines.append("")
-    lines.append(f"  {'pass@' + str(k_inferred) + '  lower bound:':<44} {green(f'{pk_lo:.2%}')}")
-    lines.append(f"  {'pass@' + str(k_inferred) + '  upper bound:':<44} {yellow(f'{pk_hi:.2%}')}")
+    pk_lo_n = pk_lo * n_problems
+    pk_hi_n = pk_hi * n_problems
+    lines.append(f"  {'pass@' + str(k_inferred) + '  lower bound:':<44} {green(f'{pk_lo:.2%}')}  {dim(f'(~{pk_lo_n:.1f}/{n_problems} problems)')}")
+    lines.append(f"  {'pass@' + str(k_inferred) + '  upper bound:':<44} {yellow(f'{pk_hi:.2%}')}  {dim(f'(~{pk_hi_n:.1f}/{n_problems} problems)')}")
 
     lines.append("")
     lines.append("═" * WIDTH)
