@@ -73,8 +73,29 @@ class ProveFormalizationsConfig:
     goedel_vllm_stream_interval: int = 200
     goedel_vllm_enable_prefix_caching: bool = True
     goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
-    goedel_tokenizer_path: str = "goedel_prover_hf_tokenizer"
+    goedel_tokenizer_path: str = "tokenizers/goedel_prover_hf_tokenizer"
     goedel_max_error_message_chars: int = 0
+
+    # ------------------------------------------------------------------ #
+    # Prover type selection
+    # ------------------------------------------------------------------ #
+    # "goedel" — use GoedelProverAgent + RawBackend (vLLM or Ollama raw).
+    # "tir"    — use TIRProverAgent + OllamaTIRBackend (Ollama chat API with
+    #            native tool calls; supports Python + Lean tools).
+    prover_type: str = "goedel"
+
+    # TIR prover settings (used when prover_type == "tir")
+    tir_ollama_model: str = "qwen3.5"
+    tir_ollama_host: str = "http://localhost:11434"
+    tir_ollama_client_timeout: int = 960
+    tir_think: bool = True
+    tir_max_tokens: int = 16384
+    tir_temperature: float = 0.6
+    tir_top_p: float = 0.95
+    tir_max_turns: int = 32
+    tir_timeout_seconds: float = 600.0
+    tir_use_python_tool: bool = True
+    tir_lean_workspace_subdir: str = ".conjecturing_agents/tir_lean_runs_prove"
 
     # Progressive token budget.
     # Stop each prover session when its rendered prompt reaches this many
@@ -225,6 +246,50 @@ def make_goedel_backend(cfg: ProveFormalizationsConfig):
         host=cfg.goedel_ollama_host,
         client_timeout=cfg.goedel_ollama_client_timeout,
         tokenizer_path=cfg.goedel_tokenizer_path,
+    ))
+
+
+def make_tir_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: str = ""):
+    """Build a ``TIRProverConfig`` from the flat script config."""
+    from conjecturing_agents.agents.tir_prover import TIRProverConfig
+    from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerConfig
+    from conjecturing_agents.tool_calling_backends.jupyter import JupyterKernelConfig
+
+    subdir = cfg.tir_lean_workspace_subdir
+    if workspace_suffix:
+        subdir = subdir + "_" + workspace_suffix
+    lean_cfg = LeanCompilerConfig(
+        project_dir=cfg.lean_project_dir,
+        workspace_subdir=subdir,
+        timeout_seconds=cfg.lean_timeout_seconds,
+        lean_jobs=cfg.lean_jobs,
+        max_memory_megabytes=cfg.lean_max_memory_megabytes,
+        treat_sorry_warning_as_failure=True,
+        treat_any_warning_as_failure=False,
+    )
+    return TIRProverConfig(
+        lean=lean_cfg,
+        jupyter=JupyterKernelConfig(),
+        max_tokens=cfg.tir_max_tokens,
+        temperature=cfg.tir_temperature,
+        top_p=cfg.tir_top_p,
+        max_turns=cfg.tir_max_turns,
+        timeout_seconds=cfg.tir_timeout_seconds,
+        use_python_tool=cfg.tir_use_python_tool,
+    )
+
+
+def make_tir_backend(cfg: ProveFormalizationsConfig):
+    """Instantiate the ``OllamaTIRBackend`` for the TIR prover."""
+    from conjecturing_agents.inference_backends.ollama_tir import (
+        OllamaTIRBackend,
+        OllamaTIRConfig,
+    )
+    return OllamaTIRBackend(OllamaTIRConfig(
+        model=cfg.tir_ollama_model,
+        host=cfg.tir_ollama_host,
+        client_timeout=cfg.tir_ollama_client_timeout,
+        think=cfg.tir_think,
     ))
 
 
@@ -536,6 +601,83 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
             "0 = no truncation (default). Suggested value: 2000."
         ),
     )
+    # TIR prover settings
+    p.add_argument(
+        "--prover-type",
+        dest="prover_type",
+        choices=["goedel", "tir"],
+        default=ProveFormalizationsConfig.prover_type,
+        help=(
+            "Which prover to use. 'goedel' uses GoedelProverAgent with a RawBackend "
+            "(vLLM or Ollama raw completion). 'tir' uses TIRProverAgent with OllamaTIRBackend "
+            "(Ollama chat API with native Python + Lean tool calls)."
+        ),
+    )
+    p.add_argument(
+        "--tir-ollama-model",
+        default=ProveFormalizationsConfig.tir_ollama_model,
+        help="Ollama model name for the TIR prover (prover-type=tir). Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-ollama-host",
+        default=ProveFormalizationsConfig.tir_ollama_host,
+        help="Ollama server URL for the TIR prover (prover-type=tir). Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-ollama-client-timeout",
+        type=int,
+        default=ProveFormalizationsConfig.tir_ollama_client_timeout,
+        help="HTTP client timeout (seconds) for the TIR Ollama backend. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-no-think",
+        dest="tir_think",
+        action="store_false",
+        default=ProveFormalizationsConfig.tir_think,
+        help="Disable extended thinking for the TIR model (prover-type=tir).",
+    )
+    p.add_argument(
+        "--tir-max-tokens",
+        type=int,
+        default=ProveFormalizationsConfig.tir_max_tokens,
+        help="Max tokens to generate per TIR turn. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-temperature",
+        type=float,
+        default=ProveFormalizationsConfig.tir_temperature,
+        help="Sampling temperature for the TIR prover. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-top-p",
+        type=float,
+        default=ProveFormalizationsConfig.tir_top_p,
+        help="Top-p (nucleus) sampling for the TIR prover. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-max-turns",
+        type=int,
+        default=ProveFormalizationsConfig.tir_max_turns,
+        help="Maximum tool-call turns per TIR session. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-timeout-seconds",
+        type=float,
+        default=ProveFormalizationsConfig.tir_timeout_seconds,
+        help="Wall-clock timeout (seconds) per TIR session. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-no-python-tool",
+        dest="tir_use_python_tool",
+        action="store_false",
+        default=ProveFormalizationsConfig.tir_use_python_tool,
+        help="Disable the Python (Jupyter) tool for the TIR prover.",
+    )
+    p.add_argument(
+        "--tir-lean-workspace-subdir",
+        default=ProveFormalizationsConfig.tir_lean_workspace_subdir,
+        help="Subdirectory for TIR Lean temp files inside lean_project_dir. Default: %(default)s.",
+    )
     p.add_argument(
         "--limit-prover-tokens",
         type=int,
@@ -544,6 +686,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
             "Stop each prover session when its rendered prompt reaches this many tokens. "
             "0 = unlimited. Use --continue with a higher value to resume sessions that "
             "were cut off, extending the budget progressively (e.g. 4000 → 8000 → 40960)."
+            " Note: token limiting is not supported for the TIR prover."
         ),
     )
     p.add_argument(
@@ -640,6 +783,18 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         goedel_vllm_extra_server_args=args.goedel_vllm_extra_server_args or [],
         goedel_tokenizer_path=args.goedel_tokenizer_path,
         goedel_max_error_message_chars=args.goedel_max_error_message_chars,
+        prover_type=args.prover_type,
+        tir_ollama_model=args.tir_ollama_model,
+        tir_ollama_host=args.tir_ollama_host,
+        tir_ollama_client_timeout=args.tir_ollama_client_timeout,
+        tir_think=args.tir_think,
+        tir_max_tokens=args.tir_max_tokens,
+        tir_temperature=args.tir_temperature,
+        tir_top_p=args.tir_top_p,
+        tir_max_turns=args.tir_max_turns,
+        tir_timeout_seconds=args.tir_timeout_seconds,
+        tir_use_python_tool=args.tir_use_python_tool,
+        tir_lean_workspace_subdir=args.tir_lean_workspace_subdir,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

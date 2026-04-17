@@ -669,6 +669,110 @@ class Lean4CompilerToolBackend:
 
 
 # ============================================================
+# TIR adapter (non-Harmony)
+# ============================================================
+
+class Lean4TIRToolBackend:
+    """
+    TIR (non-Harmony) adapter for Lean 4 compilation.
+
+    Exposes:
+      - tool_def: the OpenAI/Ollama JSON function schema to pass to the model
+      - handle_call(tool_name, arguments) -> str: invoked by TIRBackend.run_session()
+
+    Typical usage:
+
+        lean_tir = Lean4TIRToolBackend(
+            description="Compile and check Lean 4 code ...",
+            cfg=LeanCompilerConfig(project_dir="/path/to/project"),
+        )
+
+        result = backend.run_session(
+            messages=[...],
+            tools=[lean_tir.tool_def],
+            tool_handlers={lean_tir.cfg.tool_name: lean_tir.handle_call},
+            cfg=TIRGenerationConfig(...),
+        )
+    """
+
+    def __init__(
+        self,
+        description: str,
+        *,
+        cfg: LeanCompilerConfig,
+    ) -> None:
+        self.description = description
+        self.cfg = cfg
+        self.backend = Lean4CompilerBackend(cfg)
+
+    @property
+    def tool_def(self) -> Dict[str, Any]:
+        """OpenAI/Ollama JSON function schema for this tool."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.cfg.tool_name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "required": ["code"],
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Lean 4 code to compile and check",
+                        }
+                    },
+                },
+            },
+        }
+
+    def handle_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """
+        Execute a tool call dispatched by TIRBackend.run_session().
+
+        Compiles the Lean code in arguments["code"] and returns formatted
+        diagnostic feedback as a string.
+        """
+        code_raw = arguments.get("code", "")
+        code = (
+            extract_lean_code_block_or_text(code_raw)
+            if self.cfg.auto_extract_code_block
+            else code_raw.strip()
+        )
+        result = self.backend.compile_code(code)
+        return build_tool_facing_feedback(result, cfg=self.cfg)
+
+    def compile_code(
+        self,
+        code: str,
+        *,
+        timeout_seconds: Optional[int] = None,
+        relative_path: Optional[str] = None,
+    ) -> LeanCompileResult:
+        """Direct compilation bypass (same as Lean4CompilerToolBackend.compile_code)."""
+        return self.backend.compile_code(
+            code,
+            timeout_seconds=timeout_seconds,
+            relative_path=relative_path,
+        )
+
+    def close(self) -> None:
+        self.backend.close()
+
+    def __enter__(self) -> "Lean4TIRToolBackend":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+# ============================================================
 # Optional cleanup helper
 # ============================================================
 
@@ -689,6 +793,7 @@ __all__ = [
     "LeanCompilerConfig",
     "Lean4CompilerBackend",
     "Lean4CompilerToolBackend",
+    "Lean4TIRToolBackend",
     "extract_lean_code_block",
     "extract_lean_code_block_or_text",
     "parse_lean_json_stdout",

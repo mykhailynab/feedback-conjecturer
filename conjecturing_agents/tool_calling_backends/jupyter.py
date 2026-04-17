@@ -511,3 +511,106 @@ class JupyterToolBackend:
                 continue
             chunks.append(item.text)
         return "\n".join(chunks)
+
+
+# ============================================================
+# TIR adapter (non-Harmony)
+# ============================================================
+
+class JupyterTIRToolBackend:
+    """
+    TIR (non-Harmony) adapter for a stateful Jupyter Python kernel.
+
+    Exposes:
+      - tool_def: the OpenAI/Ollama JSON function schema to pass to the model
+      - handle_call(tool_name, arguments) -> str: invoked by TIRBackend.run_session()
+
+    Typical usage:
+
+        jupyter_tir = JupyterTIRToolBackend(
+            description="Execute Python code and return its output ...",
+        )
+
+        result = backend.run_session(
+            messages=[...],
+            tools=[jupyter_tir.tool_def],
+            tool_handlers={jupyter_tir.cfg.tool_name: jupyter_tir.handle_call},
+            cfg=TIRGenerationConfig(...),
+        )
+
+    Each instance owns one stateful kernel, so create one per agent/session.
+    """
+
+    def __init__(
+        self,
+        description: str,
+        *,
+        cfg: Optional[JupyterKernelConfig] = None,
+    ) -> None:
+        self.description = description
+        self.cfg = cfg or JupyterKernelConfig()
+        self.session = JupyterKernelSession(self.cfg)
+
+    @property
+    def tool_def(self) -> Dict[str, Any]:
+        """OpenAI/Ollama JSON function schema for this tool."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.cfg.tool_name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "required": ["code"],
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Python code to execute",
+                        }
+                    },
+                },
+            },
+        }
+
+    def handle_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """
+        Execute a tool call dispatched by TIRBackend.run_session().
+
+        Runs the Python code in arguments["code"] and returns the output
+        (stdout / stderr / error) as a string.
+        """
+        code = arguments.get("code", "")
+        result = self.session.execute(code)
+        return result.output
+
+    def execute(self, code: str, timeout: Optional[float] = None) -> JupyterExecutionResult:
+        """Direct execution bypass."""
+        return self.session.execute(code, timeout=timeout)
+
+    def reset(self) -> None:
+        self.session.reset()
+
+    def close(self) -> None:
+        self.session.close()
+
+    def __enter__(self) -> "JupyterTIRToolBackend":
+        self.session.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+__all__ = [
+    "JupyterKernelConfig",
+    "JupyterExecutionResult",
+    "JupyterKernelSession",
+    "JupyterToolBackend",
+    "JupyterTIRToolBackend",
+]

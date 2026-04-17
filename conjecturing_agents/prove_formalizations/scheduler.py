@@ -25,7 +25,7 @@ import dataclasses
 import threading
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from conjecturing_agents.lean_regex import (
     negate_theorem_statement,
@@ -35,9 +35,24 @@ from conjecturing_agents.agents.goedel_prover import (
     GoedelProverAgent,
     GoedelProverResult,
 )
+from conjecturing_agents.agents.tir_prover import (
+    TIRProverAgent,
+    TIRProverResult,
+)
 from conjecturing_agents.inference_backends.raw_backend import RawBackend, EventLoggerFn
+from conjecturing_agents.inference_backends.tir_base import TIRBackend
 
-from .config import ProveFormalizationsConfig, make_goedel_prover_config, make_goedel_backend
+ProverAgent = Union[GoedelProverAgent, TIRProverAgent]
+ProverBackend = Union[RawBackend, TIRBackend]
+ProverResult = Union[GoedelProverResult, TIRProverResult]
+
+from .config import (
+    ProveFormalizationsConfig,
+    make_goedel_prover_config,
+    make_goedel_backend,
+    make_tir_prover_config,
+    make_tir_backend,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -48,13 +63,13 @@ def _record_key(r: Dict[str, Any]) -> Tuple[Any, Any]:
     return (r.get("problem_id"), r.get("attempt"))
 
 
-def _result_to_dict(r: GoedelProverResult) -> Dict[str, Any]:
+def _result_to_dict(r: ProverResult) -> Dict[str, Any]:
     return dataclasses.asdict(r)
 
 
 def _run_prove_attempts(
-    agent: GoedelProverAgent,
-    backend: RawBackend,
+    agent: ProverAgent,
+    backend: ProverBackend,
     theorem_text: str,
     *,
     base_seed: int,
@@ -65,14 +80,14 @@ def _run_prove_attempts(
     token_limit: int = 0,
     initial_messages: Optional[List[Dict[str, Any]]] = None,
     initial_partial_response: str = "",
-) -> GoedelProverResult:
+) -> ProverResult:
     """Run up to ``retries`` proof attempts, stopping as soon as one succeeds.
 
     ``initial_messages`` and ``initial_partial_response`` are used only for
     retry 0 (resuming a saved incomplete session).  Subsequent retries always
     start fresh with a new seed.
     """
-    last_result: Optional[GoedelProverResult] = None
+    last_result: Optional[ProverResult] = None
     for i in range(retries):
         if stop_event is not None and stop_event.is_set():
             break
@@ -123,8 +138,8 @@ def _extract_resume_state(
 def process_record_sequential(
     record: Dict[str, Any],
     *,
-    proof_agent: GoedelProverAgent,
-    proof_backend: RawBackend,
+    proof_agent: ProverAgent,
+    proof_backend: ProverBackend,
     proof_retries: int,
     base_seed: int,
     event_logger: Optional[EventLoggerFn],
@@ -170,10 +185,10 @@ def process_record_sequential(
 def process_record_sequential_with_disproof(
     record: Dict[str, Any],
     *,
-    proof_agent: GoedelProverAgent,
-    proof_backend: RawBackend,
-    disproof_agent: GoedelProverAgent,
-    disproof_backend: RawBackend,
+    proof_agent: ProverAgent,
+    proof_backend: ProverBackend,
+    disproof_agent: ProverAgent,
+    disproof_backend: ProverBackend,
     proof_retries: int,
     disproof_retries: int,
     base_seed: int,
@@ -210,7 +225,7 @@ def process_record_sequential_with_disproof(
     )
 
     # If proof is still incomplete (token-limited), skip disproof for now.
-    disproof_result: Optional[GoedelProverResult] = None
+    disproof_result: Optional[ProverResult] = None
     if not proof_result.proved and not proof_result.incomplete:
         try:
             negated_lean = negate_theorem_statement(proved_lean)
@@ -250,10 +265,10 @@ def process_record_sequential_with_disproof(
 def process_record_parallel(
     record: Dict[str, Any],
     *,
-    proof_agent: GoedelProverAgent,
-    proof_backend: RawBackend,
-    disproof_agent: GoedelProverAgent,
-    disproof_backend: RawBackend,
+    proof_agent: ProverAgent,
+    proof_backend: ProverBackend,
+    disproof_agent: ProverAgent,
+    disproof_backend: ProverBackend,
     proof_retries: int,
     disproof_retries: int,
     base_seed: int,
@@ -287,8 +302,8 @@ def process_record_parallel(
     init_proof_msgs, init_proof_partial = _extract_resume_state(incomplete_result, "proof_result")
     init_dis_msgs, init_dis_partial = _extract_resume_state(incomplete_result, "disproof_result")
 
-    proof_result: Optional[GoedelProverResult] = None
-    disproof_result: Optional[GoedelProverResult] = None
+    proof_result: Optional[ProverResult] = None
+    disproof_result: Optional[ProverResult] = None
 
     def run_proof() -> None:
         nonlocal proof_result
@@ -349,8 +364,8 @@ def _build_output_record(
     *,
     proved_lean: str,
     negated_lean: Optional[str],
-    proof_result: Optional[GoedelProverResult],
-    disproof_result: Optional[GoedelProverResult],
+    proof_result: Optional[ProverResult],
+    disproof_result: Optional[ProverResult],
 ) -> Dict[str, Any]:
     proved = proof_result.proved if proof_result is not None else False
     disproved = disproof_result.proved if disproof_result is not None else False
@@ -420,9 +435,15 @@ class ProveFormalizationsScheduler:
         # directions.  This matters most for LoadBalancedRawBackend: creating
         # two independent instances would double the effective slot capacity and
         # over-subscribe GPUs in parallel-disproof mode.
-        goedel_proof_cfg = make_goedel_prover_config(cfg, workspace_suffix="proof")
-        self._proof_agent = GoedelProverAgent(goedel_proof_cfg)
-        self._proof_backend = make_goedel_backend(cfg)
+        if cfg.prover_type == "tir":
+            from conjecturing_agents.agents.tir_prover import TIRProverAgent
+            tir_proof_cfg = make_tir_prover_config(cfg, workspace_suffix="proof")
+            self._proof_agent: ProverAgent = TIRProverAgent(tir_proof_cfg)
+            self._proof_backend: ProverBackend = make_tir_backend(cfg)
+        else:
+            goedel_proof_cfg = make_goedel_prover_config(cfg, workspace_suffix="proof")
+            self._proof_agent = GoedelProverAgent(goedel_proof_cfg)
+            self._proof_backend = make_goedel_backend(cfg)
 
         if cfg.print_agent_conv:
             self._proof_backend.set_verbose(True)
@@ -430,12 +451,17 @@ class ProveFormalizationsScheduler:
             self._proof_backend.set_event_logger(event_logger)
 
         # Build disproof agent (when either disproof mode is active).
-        # Re-use the same backend object — do NOT call make_goedel_backend again.
-        self._disproof_agent: Optional[GoedelProverAgent] = None
-        self._disproof_backend: Optional[RawBackend] = None
+        # Re-use the same backend object — do NOT call make_*_backend again.
+        self._disproof_agent: Optional[ProverAgent] = None
+        self._disproof_backend: Optional[ProverBackend] = None
         if cfg.enable_parallel_disproof or cfg.enable_sequential_disproof:
-            goedel_disproof_cfg = make_goedel_prover_config(cfg, workspace_suffix="disproof")
-            self._disproof_agent = GoedelProverAgent(goedel_disproof_cfg)
+            if cfg.prover_type == "tir":
+                from conjecturing_agents.agents.tir_prover import TIRProverAgent
+                tir_disproof_cfg = make_tir_prover_config(cfg, workspace_suffix="disproof")
+                self._disproof_agent = TIRProverAgent(tir_disproof_cfg)
+            else:
+                goedel_disproof_cfg = make_goedel_prover_config(cfg, workspace_suffix="disproof")
+                self._disproof_agent = GoedelProverAgent(goedel_disproof_cfg)
             self._disproof_backend = self._proof_backend  # shared
 
     def run(
