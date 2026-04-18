@@ -38,7 +38,6 @@ class ProveFormalizationsConfig:
     disproof_retries: int = 1
 
     # Goedel prover settings
-    goedel_chat_template_path: str = "templates/goedel_template.jinja"
     goedel_max_rounds: int = 2
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6
@@ -96,6 +95,13 @@ class ProveFormalizationsConfig:
     tir_timeout_seconds: float = 600.0
     tir_use_python_tool: bool = True
     tir_lean_workspace_subdir: str = ".conjecturing_agents/tir_lean_runs_prove"
+    tir_top_k: int = -1
+    tir_min_p: float = 0.0
+    tir_presence_penalty: float = 0.0
+    tir_repeat_penalty: float = 1.0
+    # HuggingFace tokenizer directory — required for --limit-prover-tokens.
+    # Example: "tokenizers/Qwen3.5-27B"
+    tir_tokenizer_path: str = ""
 
     # Progressive token budget.
     # Stop each prover session when its rendered prompt reaches this many
@@ -146,6 +152,10 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
         errs.append(
             "when --enable-parallel-disproof is set, --parallelism must be divisible by 2"
         )
+    if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and not cfg.tir_tokenizer_path:
+        errs.append(
+            "when --limit-prover-tokens is set with --prover-type=tir, --tir-tokenizer-path must be set"
+        )
 
     if errs:
         raise ValueError("Invalid configuration:\n- " + "\n- ".join(errs))
@@ -173,7 +183,7 @@ def make_goedel_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: 
         treat_any_warning_as_failure=False,
     )
     return GoedelProverConfig(
-        chat_template_path=cfg.goedel_chat_template_path,
+        tokenizer_path=cfg.goedel_tokenizer_path,
         max_rounds=cfg.goedel_max_rounds,
         max_tokens=cfg.goedel_max_tokens,
         temperature=cfg.goedel_temperature,
@@ -290,6 +300,11 @@ def make_tir_backend(cfg: ProveFormalizationsConfig):
         host=cfg.tir_ollama_host,
         client_timeout=cfg.tir_ollama_client_timeout,
         think=cfg.tir_think,
+        top_k=cfg.tir_top_k,
+        min_p=cfg.tir_min_p,
+        presence_penalty=cfg.tir_presence_penalty,
+        repeat_penalty=cfg.tir_repeat_penalty,
+        tokenizer_path=cfg.tir_tokenizer_path,
     ))
 
 
@@ -403,11 +418,6 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
     )
 
     # Goedel prover settings
-    p.add_argument(
-        "--goedel-chat-template-path",
-        default=ProveFormalizationsConfig.goedel_chat_template_path,
-        help="Path to the Jinja2 chat template for the Goedel model.",
-    )
     p.add_argument(
         "--goedel-max-rounds",
         type=int,
@@ -679,14 +689,47 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         help="Subdirectory for TIR Lean temp files inside lean_project_dir. Default: %(default)s.",
     )
     p.add_argument(
+        "--tir-top-k",
+        type=int,
+        default=ProveFormalizationsConfig.tir_top_k,
+        help="Top-k sampling for the TIR prover. -1 = disabled. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-min-p",
+        type=float,
+        default=ProveFormalizationsConfig.tir_min_p,
+        help="Min-p sampling for the TIR prover. 0.0 = disabled. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-presence-penalty",
+        type=float,
+        default=ProveFormalizationsConfig.tir_presence_penalty,
+        help="Presence penalty for the TIR prover. 0.0 = no penalty. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-repeat-penalty",
+        type=float,
+        default=ProveFormalizationsConfig.tir_repeat_penalty,
+        help="Repetition penalty for the TIR prover. 1.0 = disabled. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--tir-tokenizer-path",
+        default=ProveFormalizationsConfig.tir_tokenizer_path,
+        help=(
+            "Path to the HuggingFace tokenizer directory for the TIR model. "
+            "Required when --limit-prover-tokens is used with the TIR prover. "
+            "Example: tokenizers/Qwen3.5-27B"
+        ),
+    )
+    p.add_argument(
         "--limit-prover-tokens",
         type=int,
         default=ProveFormalizationsConfig.limit_prover_tokens,
         help=(
             "Stop each prover session when its rendered prompt reaches this many tokens. "
             "0 = unlimited. Use --continue with a higher value to resume sessions that "
-            "were cut off, extending the budget progressively (e.g. 4000 → 8000 → 40960)."
-            " Note: token limiting is not supported for the TIR prover."
+            "were cut off, extending the budget progressively (e.g. 4000 → 8000 → 40960). "
+            "For the TIR prover, requires --tir-tokenizer-path."
         ),
     )
     p.add_argument(
@@ -751,7 +794,6 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         enable_parallel_disproof=args.enable_parallel_disproof,
         enable_sequential_disproof=args.enable_sequential_disproof,
         disproof_retries=args.disproof_retries,
-        goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,
         goedel_max_tokens=args.goedel_max_tokens,
         goedel_temperature=args.goedel_temperature,
@@ -795,6 +837,11 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         tir_timeout_seconds=args.tir_timeout_seconds,
         tir_use_python_tool=args.tir_use_python_tool,
         tir_lean_workspace_subdir=args.tir_lean_workspace_subdir,
+        tir_top_k=args.tir_top_k,
+        tir_min_p=args.tir_min_p,
+        tir_presence_penalty=args.tir_presence_penalty,
+        tir_repeat_penalty=args.tir_repeat_penalty,
+        tir_tokenizer_path=args.tir_tokenizer_path,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

@@ -88,7 +88,6 @@ class TIRProverAgent:
         backend: TIRBackend,
         *,
         seed: int = 0,
-        stream_callback: Optional[Callable[[str], None]] = None,
         event_logger: Optional[EventLoggerFn] = None,
         metadata: Optional[Dict[str, Any]] = None,
         stop_event: Optional[threading.Event] = None,
@@ -103,18 +102,24 @@ class TIRProverAgent:
             theorem_statement: Full Lean 4 file ending with ``theorem ... := by sorry``.
             backend: A ``TIRBackend`` instance (e.g. ``OllamaTIRBackend``).
             seed: Base random seed passed to TIRGenerationConfig.
-            stream_callback: Not used by TIR (streaming is internal to the backend).
-                Accepted for API compatibility with GoedelProverAgent.
             event_logger: Optional callable for structured event logging.
             metadata: Extra key-value pairs merged into every logged event.
             stop_event: When set, the current tool-call turn is cancelled and
                 the session terminates early.
-            token_limit: Not supported for TIR (no count_tokens() in TIRBackend).
-                Accepted for API compatibility; has no effect.
+            token_limit: Stop the session (marking it incomplete) when the
+                rendered prompt reaches this many tokens.  0 = unlimited.
+                Unlike GoedelProverAgent, TIR checks the token count only
+                *between* turns (never mid-stream), so there is no partial
+                assistant turn to save — the cutoff is always clean.
+                Requires the backend to have a token counter registered
+                (OllamaTIRConfig.chat_template_path + tokenizer_path).
             initial_messages: If provided, resume the session from this saved
-                conversation history rather than starting fresh.
-            partial_response: Not applicable for TIR.  Accepted for API
-                compatibility; has no effect.
+                conversation history rather than starting fresh.  Used by the
+                scheduler to continue an incomplete session from a prior run.
+            partial_response: Not used by TIR.  Accepted for API compatibility
+                with GoedelProverAgent.  Because the token limit always fires
+                between turns, there is never a partial assistant turn to
+                resume from.
 
         Returns:
             TIRProverResult with proved=True iff any lean tool call returned [OK].
@@ -193,6 +198,7 @@ class TIRProverAgent:
             seed=seed,
             max_turns=self.cfg.max_turns,
             timeout_seconds=self.cfg.timeout_seconds,
+            token_limit=token_limit,
         )
 
         _log("tir_prover_session_start", {
@@ -252,11 +258,14 @@ class TIRProverAgent:
         else:
             termination_reason = session_result.termination_reason
 
+        incomplete = session_result.incomplete
+
         _log("tir_prover_session_done", {
             "proved": proved,
             "termination_reason": termination_reason,
             "turns_used": len(session_result.turns),
             "elapsed_ms": elapsed_ms,
+            "incomplete": incomplete,
             "exception": session_result.exception,
         })
 
@@ -270,6 +279,10 @@ class TIRProverAgent:
             elapsed_ms=elapsed_ms,
             turns=turns_as_dicts,
             exception=session_result.exception,
+            incomplete=incomplete,
+            # Save the full message list so the scheduler can resume the
+            # session via initial_messages in a subsequent --continue run.
+            conversation_history=session_result.messages_at_cutoff if incomplete else [],
         )
 
     # ------------------------------------------------------------------

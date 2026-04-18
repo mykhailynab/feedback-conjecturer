@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import ollama
 
-from .tir_base import TIRBackend, TIRGenerationConfig, TIRStreamChunk, TIRToolCallSpec
+from .tir_base import TIRBackend, TIRGenerationConfig, TIRStreamChunk, TIRToolCallSpec, TIRTokenCounter
 
 
 @dataclass
@@ -36,6 +36,23 @@ class OllamaTIRConfig:
     # thinking text is included in TIRStreamChunk.thinking.
     # ------------------------------------------------------------------ #
     think: bool = True
+
+    # ------------------------------------------------------------------ #
+    # Sampling parameters (passed to Ollama options).
+    # ------------------------------------------------------------------ #
+    top_k: int = -1           # -1 = disabled
+    min_p: float = 0.0        # 0.0 = disabled
+    presence_penalty: float = 0.0
+    repeat_penalty: float = 1.0   # 1.0 = disabled
+
+    # ------------------------------------------------------------------ #
+    # Token counting (required for --limit-prover-tokens support).
+    # When set, the backend uses the tokenizer's built-in chat template via
+    # apply_chat_template(tokenize=True) — no separate Jinja template needed.
+    # ------------------------------------------------------------------ #
+    # Path to the HuggingFace tokenizer directory for this model
+    # (e.g. "tokenizers/Qwen3.5-27B").
+    tokenizer_path: str = ""
 
 
 class OllamaTIRBackend(TIRBackend):
@@ -66,6 +83,10 @@ class OllamaTIRBackend(TIRBackend):
     def __init__(self, cfg: OllamaTIRConfig) -> None:
         self.cfg = cfg
         self._client: Optional[ollama.Client] = None
+        if cfg.tokenizer_path:
+            counter = TIRTokenCounter(tokenizer_path=cfg.tokenizer_path)
+            self.set_token_counter(counter.count)
+            self.set_text_counter(counter.count_text)
 
     # ------------------------------------------------------------------
     # Client (lazy)
@@ -107,6 +128,10 @@ class OllamaTIRBackend(TIRBackend):
             "temperature": cfg.temperature,
             "top_p": cfg.top_p,
             "num_predict": cfg.max_tokens,
+            "top_k": self.cfg.top_k,
+            "min_p": self.cfg.min_p,
+            "presence_penalty": self.cfg.presence_penalty,
+            "repeat_penalty": self.cfg.repeat_penalty,
         }
 
         self._log_event("tir_chat_stream_start", {
@@ -126,7 +151,7 @@ class OllamaTIRBackend(TIRBackend):
             )
             for m in messages:
                 role = m.get("role", "?")
-                body = str(m.get("content") or "")[:300]
+                body = str(m.get("content") or "")
                 print(f"[{role}] {body}", flush=True)
             print(f"{'='*60}\n[TIR GENERATION]\n{'='*60}", flush=True)
 
@@ -144,6 +169,8 @@ class OllamaTIRBackend(TIRBackend):
         first_chunk = True
 
         stream = client.chat(**chat_kwargs)
+
+        last_printed_think = False
 
         for chunk in stream:
             if stop_event is not None and stop_event.is_set():
@@ -173,8 +200,14 @@ class OllamaTIRBackend(TIRBackend):
 
             if self._verbose:
                 if thinking_text:
-                    print(f"[think]{thinking_text}", end="", flush=True)
+                    if not last_printed_think:
+                        last_printed_think = True
+                        print('\n[think]\n')
+                    print(f"{thinking_text}", end="", flush=True)
                 if content_text:
+                    if last_printed_think:
+                        last_printed_think = False
+                        print('\n[\\think]\n')
                     print(content_text, end="", flush=True)
 
             if thinking_text or content_text:

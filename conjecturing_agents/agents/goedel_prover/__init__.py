@@ -6,7 +6,6 @@ from .lean_utils import (
     normalize_for_prompt,
     replace_statement_in_proof,
 )
-from .prompts import render_with_template
 
 __all__ = [
     "GoedelProverConfig",
@@ -16,5 +15,4 @@ __all__ = [
     "replace_statement_in_proof",
     "extract_lean_code_block",
     "format_lean_errors",
-    "render_with_template",
 ]

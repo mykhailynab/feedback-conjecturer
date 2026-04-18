@@ -1,15 +1,11 @@
 """
-Prompt constants and chat-template rendering for the Goedel prover.
+Prompt constants for the Goedel prover.
 
 Prompts are kept verbatim from the original Goedel pipeline because the
 fine-tuned model is sensitive to the exact prompt format it was trained on.
 Original pipeline: https://github.com/Goedel-LM/Goedel-Prover-V2
 """
 from __future__ import annotations
-
-from typing import Any, Dict, List
-
-from jinja2 import Environment
 
 
 # ============================================================
@@ -37,33 +33,3 @@ CORRECTION_USER_PROMPT = (
     "Before producing the Lean 4 code to formally prove the given theorem, "
     "provide a detailed analysis of the error message."
 )
-
-
-# ============================================================
-# Template rendering
-# ============================================================
-
-def render_with_template(
-    chat_template: str,
-    messages: List[Dict[str, Any]],
-    *,
-    add_generation_prompt: bool = True,
-    enable_thinking: bool = True,
-) -> str:
-    """
-    Render an HF-style Jinja2 chat template into a raw prompt string.
-    """
-    class _Obj:
-        def __init__(self, d: Dict[str, Any]) -> None:
-            for k, v in d.items():
-                setattr(self, k, v)
-
-    msg_objs = [_Obj(m) for m in messages]
-    env = Environment(trim_blocks=True, lstrip_blocks=True)
-    tmpl = env.from_string(chat_template)
-    return tmpl.render(
-        tools=[],
-        messages=msg_objs,
-        add_generation_prompt=add_generation_prompt,
-        enable_thinking=enable_thinking,
-    )

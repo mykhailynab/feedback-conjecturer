@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import threading
 import time
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from conjecturing_agents.inference_backends.raw_backend import (
@@ -25,7 +24,6 @@ from .lean_utils import (
 from .prompts import (
     CORRECTION_USER_PROMPT,
     INITIAL_USER_PROMPT,
-    render_with_template,
 )
 
 
@@ -48,9 +46,7 @@ class GoedelProverAgent:
         if self.cfg.lean is None:
             raise ValueError("GoedelProverConfig.lean must be set")
         self.lean_backend = Lean4CompilerBackend(self.cfg.lean)
-        self.chat_template = Path(self.cfg.chat_template_path).read_text(
-            encoding="utf-8"
-        )
+        self._tokenizer = None
 
     # ------------------------------------------------------------------
     # Prompt building
@@ -80,10 +76,16 @@ class GoedelProverAgent:
         })
         return msgs
 
+    def _get_tokenizer(self):
+        if self._tokenizer is None:
+            from transformers import AutoTokenizer
+            self._tokenizer = AutoTokenizer.from_pretrained(self.cfg.tokenizer_path)
+        return self._tokenizer
+
     def _render_prompt(self, messages: List[Dict[str, str]]) -> str:
-        return render_with_template(
-            self.chat_template,
+        return self._get_tokenizer().apply_chat_template(
             messages,
+            tokenize=False,
             add_generation_prompt=True,
             enable_thinking=self.cfg.enable_thinking,
         )
@@ -97,7 +99,6 @@ class GoedelProverAgent:
         prompt: str,
         backend: RawBackend,
         gen_cfg: RawGenerationConfig,
-        stream_callback: Optional[Callable[[str], None]],
         stop_event: Optional[threading.Event] = None,
         token_limit: int = 0,
         prompt_tokens: int = 0,
@@ -109,7 +110,7 @@ class GoedelProverAgent:
         set internally when the token budget is exhausted (or when the
         external ``stop_event`` fires), so the backend loop exits promptly.
         """
-        use_streaming = stop_event is not None or token_limit > 0 or stream_callback is not None
+        use_streaming = stop_event is not None or token_limit > 0
         if not use_streaming:
             return backend.generate(prompt, gen_cfg).text, False
 
@@ -124,8 +125,6 @@ class GoedelProverAgent:
                 _streaming_stop.set()
                 break
             chunks.append(chunk)
-            if stream_callback is not None:
-                stream_callback(chunk)
             # Periodically count tokens to check the budget
             if token_limit > 0:
                 chars_since_recount += len(chunk)
@@ -149,7 +148,6 @@ class GoedelProverAgent:
         backend: RawBackend,
         *,
         seed: int = 0,
-        stream_callback: Optional[Callable[[str], None]] = None,
         event_logger: Optional[EventLoggerFn] = None,
         metadata: Optional[Dict[str, Any]] = None,
         stop_event: Optional[threading.Event] = None,
@@ -165,7 +163,6 @@ class GoedelProverAgent:
             theorem_statement: Full Lean file ending in ``theorem ... := by sorry``.
             backend: A ``RawBackend`` instance (vLLM or Ollama).
             seed: Base seed; each round adds the round index.
-            stream_callback: If provided, called with each streamed text chunk.
             event_logger: Optional callable for structured event logging.
             metadata: Extra key-value pairs merged into every logged event
                 (e.g. ``{"problem_id": 42, "attempt": 1}``).
@@ -303,7 +300,7 @@ class GoedelProverAgent:
                 repeat_penalty=self.cfg.repeat_penalty,
             )
             raw_output_new, hit_limit = self._generate(
-                prompt, backend, gen_cfg_round, stream_callback,
+                prompt, backend, gen_cfg_round,
                 stop_event=stop_event,
                 token_limit=token_limit,
                 prompt_tokens=prompt_tokens,

@@ -33,7 +33,6 @@ class CheckFormalizationsConfig:
     goedel_disproof_retries: int = 1
 
     # Goedel prover settings
-    goedel_chat_template_path: str = "templates/goedel_template.jinja"
     goedel_max_rounds: int = 2
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6
@@ -124,7 +123,6 @@ def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
         use_goedel_disprover=cfg.use_goedel_disprover,
         goedel_proof_retries=cfg.goedel_proof_retries,
         goedel_disproof_retries=cfg.goedel_disproof_retries,
-        goedel_chat_template_path=cfg.goedel_chat_template_path,
         goedel_max_rounds=cfg.goedel_max_rounds,
         goedel_max_tokens=cfg.goedel_max_tokens,
         goedel_temperature=cfg.goedel_temperature,
@@ -269,11 +267,6 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
             "Number of independent disproof attempts before giving up (pass@N). "
             "Each retry uses a different seed. Requires --goedel-disprover. Default: 1."
         ),
-    )
-    p.add_argument(
-        "--goedel-chat-template-path",
-        default=CheckFormalizationsConfig.goedel_chat_template_path,
-        help="Path to the Jinja2 chat template for the Goedel model.",
     )
     p.add_argument(
         "--goedel-max-rounds",
@@ -533,7 +526,6 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         use_goedel_disprover=args.use_goedel_disprover,
         goedel_proof_retries=args.goedel_proof_retries,
         goedel_disproof_retries=args.goedel_disproof_retries,
-        goedel_chat_template_path=args.goedel_chat_template_path,
         goedel_max_rounds=args.goedel_max_rounds,
         goedel_max_tokens=args.goedel_max_tokens,
         goedel_temperature=args.goedel_temperature,

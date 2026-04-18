@@ -45,7 +45,6 @@ class AnswerCheckerConfig:
     # ------------------------------------------------------------------ #
     # Goedel prover (heuristic 3)
     # ------------------------------------------------------------------ #
-    goedel_chat_template_path: str = "templates/goedel_template.jinja"
     goedel_max_rounds: int = 2
     goedel_max_tokens: int = 16384
     goedel_temperature: float = 0.6
@@ -164,7 +163,7 @@ class AnswerChecker:
                 treat_any_warning_as_failure=False,
             )
             goedel_cfg = GoedelProverConfig(
-                chat_template_path=self.cfg.goedel_chat_template_path,
+                tokenizer_path=self.cfg.goedel_tokenizer_path,
                 max_rounds=self.cfg.goedel_max_rounds,
                 max_tokens=self.cfg.goedel_max_tokens,
                 temperature=self.cfg.goedel_temperature,

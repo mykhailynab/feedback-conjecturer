@@ -41,6 +41,10 @@ class TIRGenerationConfig:
     seed: int = 0
     max_turns: int = 32
     timeout_seconds: float = 300.0
+    # Stop the session (marking it incomplete) when the rendered prompt reaches
+    # this many tokens.  0 = unlimited.  Use with --continue for progressive
+    # budget runs (same semantics as GoedelProverAgent token_limit).
+    token_limit: int = 0
 
 
 @dataclass
@@ -90,6 +94,11 @@ class TIRSessionResult:
     # Optional throughput fields (populated by backends that track tokens)
     total_output_tokens: Optional[int] = None
     total_generation_ms: Optional[int] = None
+    # Set to True when the session was stopped by the token limit.
+    # messages_at_cutoff holds the full message list at the point of cutoff
+    # so the caller can resume the session in a later run.
+    incomplete: bool = False
+    messages_at_cutoff: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # Callable type for a tool handler: receives tool name + arguments, returns string.
@@ -113,6 +122,8 @@ class TIRBackend(ABC):
 
     _verbose: bool = False
     _event_logger: Optional[EventLoggerFn] = None
+    _token_counter_fn: Optional[Callable[..., int]] = None
+    _text_counter_fn: Optional[Callable[[str], int]] = None
 
     def set_verbose(self, enabled: bool) -> None:
         """Enable real-time prompt+token printing to stdout."""
@@ -121,6 +132,36 @@ class TIRBackend(ABC):
     def set_event_logger(self, fn: EventLoggerFn) -> None:
         """Register a callable that receives (event_type, payload) dicts."""
         self._event_logger = fn
+
+    def set_token_counter(
+        self,
+        fn: Callable[[List[Dict[str, Any]], List[Dict[str, Any]]], int],
+    ) -> None:
+        """Register a callable for counting tokens in a (messages, tools) pair."""
+        self._token_counter_fn = fn
+
+    def set_text_counter(self, fn: Callable[[str], int]) -> None:
+        """Register a callable for counting tokens in a raw text string.
+
+        Used for per-chunk budget checks during streaming.
+        """
+        self._text_counter_fn = fn
+
+    def count_tokens_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+    ) -> int:
+        """Return token count of the rendered prompt.  Returns 0 if no counter is set."""
+        if self._token_counter_fn is None:
+            return 0
+        return self._token_counter_fn(messages, tools)
+
+    def count_tokens_text(self, text: str) -> int:
+        """Return token count of a raw text string.  Returns 0 if no counter is set."""
+        if self._text_counter_fn is None:
+            return 0
+        return self._text_counter_fn(text)
 
     def _log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         if self._event_logger is not None:
@@ -183,6 +224,8 @@ class TIRBackend(ABC):
         termination_reason = "unknown"
         exception_text: Optional[str] = None
         final_text = ""
+        incomplete = False
+        messages_at_cutoff: List[Dict[str, Any]] = []
 
         self._log_event("tir_session_start", {
             "max_turns": cfg.max_turns,
@@ -200,15 +243,37 @@ class TIRBackend(ABC):
                     termination_reason = "stop_event"
                     break
 
+                # Token limit check — before submitting the next LLM call.
+                if cfg.token_limit > 0:
+                    current_tokens = self.count_tokens_messages(messages, tools)
+                    self._log_event("tir_token_count", {
+                        "turn": turn_idx,
+                        "tokens": current_tokens,
+                        "limit": cfg.token_limit,
+                    })
+                    if current_tokens >= cfg.token_limit:
+                        termination_reason = "token_limit"
+                        incomplete = True
+                        messages_at_cutoff = list(messages)
+                        break
+
                 # Increment seed per turn for diversity across turns.
                 turn_cfg = replace(cfg, seed=(cfg.seed + turn_idx) & 0x7FFFFFFF)
 
                 self._log_event("tir_turn_start", {"turn": turn_idx})
 
+                # Snapshot prompt token count once per turn for per-chunk budget checks.
+                turn_prompt_tokens = (
+                    self.count_tokens_messages(messages, tools)
+                    if cfg.token_limit > 0
+                    else 0
+                )
+
                 thinking = ""
                 content = ""
                 tool_call_specs: List[TIRToolCallSpec] = []
                 stream_interrupted = False
+                chars_since_recount = 0
 
                 try:
                     for chunk in self.chat_streaming(
@@ -225,6 +290,18 @@ class TIRBackend(ABC):
                         thinking += chunk.thinking
                         content += chunk.content
                         tool_call_specs.extend(chunk.tool_calls)
+                        # Per-chunk token budget check (every ~200 chars).
+                        if cfg.token_limit > 0:
+                            chars_since_recount += len(chunk.thinking) + len(chunk.content)
+                            if chars_since_recount >= 200:
+                                chars_since_recount = 0
+                                gen_tokens = self.count_tokens_text(thinking + content)
+                                if turn_prompt_tokens + gen_tokens >= cfg.token_limit:
+                                    termination_reason = "token_limit"
+                                    incomplete = True
+                                    messages_at_cutoff = list(messages)
+                                    stream_interrupted = True
+                                    break
 
                 except Exception as exc:
                     exception_text = f"{type(exc).__name__}: {exc}"
@@ -335,6 +412,8 @@ class TIRBackend(ABC):
             termination_reason=termination_reason,
             elapsed_ms=elapsed_ms,
             exception=exception_text,
+            incomplete=incomplete,
+            messages_at_cutoff=messages_at_cutoff,
         )
 
     # ------------------------------------------------------------------
@@ -351,6 +430,50 @@ class TIRBackend(ABC):
         self.close()
 
 
+# ============================================================
+# Token counting helpers
+# ============================================================
+
+class TIRTokenCounter:
+    """Counts tokens using a HuggingFace tokenizer's built-in chat template.
+
+    Uses ``tokenizer.apply_chat_template(messages, tools=tools,
+    tokenize=True, add_generation_prompt=True)`` — renders and tokenizes the
+    conversation in one call.  No separate Jinja2 template file is needed.
+
+    The ``count`` method is thread-safe (the tokenizer is read-only after
+    construction).
+
+    Usage::
+
+        counter = TIRTokenCounter(tokenizer_path="tokenizers/Qwen3.5-27B")
+        backend.set_token_counter(counter.count)
+        backend.set_text_counter(counter.count_text)
+    """
+
+    def __init__(self, tokenizer_path: str) -> None:
+        from transformers import AutoTokenizer
+        self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+
+    def count(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+    ) -> int:
+        """Return the number of tokens in the rendered prompt."""
+        ids = self._tokenizer.apply_chat_template(
+            messages,
+            tools=tools or None,
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+        return len(ids)
+
+    def count_text(self, text: str) -> int:
+        """Return the token count for a raw text string."""
+        return len(self._tokenizer.encode(text, add_special_tokens=False))
+
+
 __all__ = [
     "EventLoggerFn",
     "TIRGenerationConfig",
@@ -360,4 +483,5 @@ __all__ = [
     "TIRSessionResult",
     "TIRToolHandler",
     "TIRBackend",
+    "TIRTokenCounter",
 ]

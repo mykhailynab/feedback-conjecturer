@@ -30,7 +30,6 @@ import pytest
 from conjecturing_agents.agents.goedel_prover.agent import GoedelProverAgent
 from conjecturing_agents.agents.goedel_prover.config import GoedelProverConfig
 from conjecturing_agents.agents.goedel_prover.lean_utils import format_lean_errors
-from conjecturing_agents.agents.goedel_prover.prompts import render_with_template
 from tests.goedel_prover.fixtures import (
     CODE_15_LINES,
     ERROR_SINGLE_LINE,
@@ -48,8 +47,7 @@ from tests.goedel_prover.reference import (
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).parents[2]
-_TOKENIZER_PATH = _REPO_ROOT / "goedel_prover_hf_tokenizer"
-_TEMPLATE_PATH = _REPO_ROOT / "goedel_template.jinja"
+_TOKENIZER_PATH = _REPO_ROOT / "tokenizers" / "goedel_prover_hf_tokenizer"
 
 _needs_tokenizer = pytest.mark.skipif(
     not _TOKENIZER_PATH.exists(),
@@ -64,18 +62,13 @@ def tokenizer():
 
 
 @pytest.fixture(scope="module")
-def chat_template():
-    return _TEMPLATE_PATH.read_text(encoding="utf-8")
-
-
-@pytest.fixture(scope="module")
 def agent(tmp_path_factory):
     """GoedelProverAgent with a dummy lean config (no actual compilation)."""
     from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerConfig
     tmp = tmp_path_factory.mktemp("lean")
     lean_cfg = LeanCompilerConfig(project_dir=str(tmp))
     cfg = GoedelProverConfig(
-        chat_template_path=str(_TEMPLATE_PATH),
+        tokenizer_path=str(_TOKENIZER_PATH),
         lean=lean_cfg,
     )
     return GoedelProverAgent(cfg)
@@ -113,12 +106,12 @@ def test_initial_message_content_matches_reference(agent, tokenizer):
 # ---------------------------------------------------------------------------
 
 @_needs_tokenizer
-def test_initial_rendered_prompt_matches_reference(agent, tokenizer, chat_template):
+def test_initial_rendered_prompt_matches_reference(agent, tokenizer):
     from conjecturing_agents.agents.goedel_prover.lean_utils import normalize_for_prompt
     formal = normalize_for_prompt(LEAN_STMT_SIMPLE)
     our_msgs = agent._build_initial_messages(formal)
 
-    our_rendered = render_with_template(chat_template, our_msgs, add_generation_prompt=True)
+    our_rendered = tokenizer.apply_chat_template(our_msgs, tokenize=False, add_generation_prompt=True)
     ref_rendered, _ = reference_initial_prompt(LEAN_STMT_SIMPLE, tokenizer)
 
     assert our_rendered == ref_rendered
@@ -199,10 +192,10 @@ def test_correction_user_feedback_content(agent, tokenizer):
 # ---------------------------------------------------------------------------
 
 @_needs_tokenizer
-def test_correction_rendered_prompt_matches_reference(agent, tokenizer, chat_template):
+def test_correction_rendered_prompt_matches_reference(agent, tokenizer):
     our_msgs, _, _, ref_error_str = _make_correction_inputs(agent, tokenizer)
 
-    our_rendered = render_with_template(chat_template, our_msgs, add_generation_prompt=True)
+    our_rendered = tokenizer.apply_chat_template(our_msgs, tokenize=False, add_generation_prompt=True)
 
     ref_rendered, _ = reference_correction_prompt(
         lean4_code=LEAN_STMT_SIMPLE,
