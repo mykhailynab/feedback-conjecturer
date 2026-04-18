@@ -14,6 +14,7 @@ import json
 import time
 import threading
 from dataclasses import dataclass
+from transformers import AutoTokenizer
 from typing import Any, Dict, Iterator, List, Optional
 
 import ollama
@@ -83,10 +84,12 @@ class OllamaTIRBackend(TIRBackend):
     def __init__(self, cfg: OllamaTIRConfig) -> None:
         self.cfg = cfg
         self._client: Optional[ollama.Client] = None
+        self._tokenizer = None
         if cfg.tokenizer_path:
             counter = TIRTokenCounter(tokenizer_path=cfg.tokenizer_path)
             self.set_token_counter(counter.count)
             self.set_text_counter(counter.count_text)
+            self._tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer_path)
 
     # ------------------------------------------------------------------
     # Client (lazy)
@@ -149,10 +152,20 @@ class OllamaTIRBackend(TIRBackend):
                 f"\n{'='*60}\n[TIR MESSAGES]\n{'='*60}",
                 flush=True,
             )
-            for m in messages:
-                role = m.get("role", "?")
-                body = str(m.get("content") or "")
-                print(f"[{role}] {body}", flush=True)
+            if self._tokenizer is not None:
+                print(self._tokenizer.apply_chat_template(
+                    messages,
+                    tools=tools or None,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                ))
+            else:
+                print("WARN: No tokenizer availabe. Falling back.")
+                for m in messages:
+                    role = m.get("role", "?")
+                    body = str(m.get("content") or "")
+                    print(f"[{role}] {body}", flush=True)
+                
             print(f"{'='*60}\n[TIR GENERATION]\n{'='*60}", flush=True)
 
         chat_kwargs: Dict[str, Any] = {
