@@ -4,7 +4,7 @@ System prompt and initial user message for the TIR (Tool-Integrated Reasoning) p
 Unlike the Goedel prover — which renders a raw prompt from a Jinja2 chat template and
 works in a closed generate/compile/correct loop — the TIR prover uses the model's native
 tool-calling interface.  The model itself decides when to call the Lean or Python tool,
-reads the results, and iterates until the Lean tool reports [OK].
+reads the results, and iterates until the lean_final tool reports [OK].
 """
 from __future__ import annotations
 
@@ -16,17 +16,12 @@ Your task is to prove a given theorem formalized in Lean 4. You will be given a 
 complete Lean 4 file where the proof placeholder `sorry` marks what you must replace \
 with a valid proof.
 
-Approach:
-1. Study the theorem statement carefully to understand what is being claimed.
-2. Think through the mathematical argument. Use Python tool if it helps clarify the math.
-3. Attempt a Lean 4 proof by replacing the `sorry` placeholder and calling the lean tool \
-with the full file. You may also attempt to compile any proof section.
-4. Read any error messages carefully. Simple closing tactics such as `norm_num`, `ring`, \
-`simp`, `omega`, `linarith`, `nlinarith`, `decide`, or `native_decide` often close goals.
-5. Refine and retry until the lean tool returns [OK] for all parts of the proof.
+Before producing the Lean 4 code to formally prove the given theorem, \
+provide a detailed proof plan outlining the main proof steps and strategies.
+The plan should highlight key ideas, intermediate lemmas, and proof structures \
+that will guide the construction of the final formal proof.
 
-When ready, use the lean_final tool to submit the final proof file, replacing the `sorry` \
-statement in the initial proof placeholder.
+Once you have a proof that compiles successfully, submit it with the lean_final tool.\
 """
 
 DEFAULT_TIR_PROVER_LEAN_TOOL_DESCRIPTION = """\
@@ -36,10 +31,28 @@ Always send the complete Lean 4 file (imports, namespace declarations, and the \
 full theorem with your proof attempt replacing `sorry`). Do not send only a tactics \
 block — the compiler needs the full file to resolve imports and namespaces.
 
+- Use this tool to verify the components of the proof before submitting the final result.
+- Read any error messages carefully. Simple closing tactics such as `norm_num`, `ring`, \
+`simp`, `omega`, `linarith`, `nlinarith`, `decide`, or `native_decide` often close goals.
+- Refine and retry until the lean tool returns [OK] for all parts of the proof.
+
 Returns:
   [OK] Lean compilation succeeded.   — the proof is accepted.
   [ERROR] Lean compilation failed.   — followed by annotated diagnostics showing \
-error positions in the code with <error>...</error> markers.
+error positions in the code with <error>...</error> markers. Provide a detailed analysys of the error message before moving forward. 
+"""
+
+DEFAULT_TIR_PROVER_LEAN_FINAL_TOOL_DESCRIPTION = """\
+Submit the final proof.
+
+Send the complete, self-contained Lean 4 file with the `sorry` placeholder replaced \
+by your proof. The file must be identical to the one in the initial user message except \
+that `sorry` is replaced by a valid proof term or tactic block.
+
+Returns:
+  [OK] Lean compilation succeeded.   — the proof is accepted.
+  [ERROR] Lean compilation failed.   — followed by annotated diagnostics showing \
+error positions in the code with <error>...</error> markers. Provide a detailed analysys of the error message before moving forward. 
 """
 
 DEFAULT_TIR_PROVER_PYTHON_TOOL_DESCRIPTION = """\
@@ -88,7 +101,7 @@ Best Practices:
 # Formatted with theorem_statement=...
 INITIAL_USER_MESSAGE = """\
 Please prove the following theorem. Replace the `sorry` placeholder with a valid \
-Lean 4 proof, using the lean tool to verify your attempts.
+Lean 4 proof and submit it with lean_final.
 
 ```lean4
 {theorem_statement}

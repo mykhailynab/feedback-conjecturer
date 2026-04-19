@@ -12,6 +12,7 @@ from conjecturing_agents.tool_calling_backends.jupyter import JupyterKernelConfi
 from .prompts import (
     DEFAULT_TIR_PROVER_SYSTEM_PROMPT,
     DEFAULT_TIR_PROVER_LEAN_TOOL_DESCRIPTION,
+    DEFAULT_TIR_PROVER_LEAN_FINAL_TOOL_DESCRIPTION,
     DEFAULT_TIR_PROVER_PYTHON_TOOL_DESCRIPTION,
 )
 
@@ -23,6 +24,7 @@ class TIRProverConfig:
     # Prompts
     system_prompt: str = DEFAULT_TIR_PROVER_SYSTEM_PROMPT
     lean_tool_description: str = DEFAULT_TIR_PROVER_LEAN_TOOL_DESCRIPTION
+    lean_final_tool_description: str = DEFAULT_TIR_PROVER_LEAN_FINAL_TOOL_DESCRIPTION
     python_tool_description: str = DEFAULT_TIR_PROVER_PYTHON_TOOL_DESCRIPTION
 
     # Generation
@@ -37,6 +39,7 @@ class TIRProverConfig:
     timeout_seconds: float = 600.0
 
     # Tools
+    use_lean_tool: bool = True    # intermediate lean calls (lean_final is always present)
     use_python_tool: bool = True
 
     # Lean compiler config — REQUIRED (must be set by the caller).

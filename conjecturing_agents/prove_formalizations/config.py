@@ -93,6 +93,7 @@ class ProveFormalizationsConfig:
     tir_top_p: float = 0.95
     tir_max_turns: int = 32
     tir_timeout_seconds: float = 600.0
+    tir_use_lean_tool: bool = True
     tir_use_python_tool: bool = True
     tir_lean_workspace_subdir: str = ".conjecturing_agents/tir_lean_runs_prove"
     tir_top_k: int = -1
@@ -285,6 +286,7 @@ def make_tir_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: str
         top_p=cfg.tir_top_p,
         max_turns=cfg.tir_max_turns,
         timeout_seconds=cfg.tir_timeout_seconds,
+        use_lean_tool=cfg.tir_use_lean_tool,
         use_python_tool=cfg.tir_use_python_tool,
     )
 
@@ -677,6 +679,13 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         help="Wall-clock timeout (seconds) per TIR session. Default: %(default)s.",
     )
     p.add_argument(
+        "--tir-no-lean-tool",
+        dest="tir_use_lean_tool",
+        action="store_false",
+        default=ProveFormalizationsConfig.tir_use_lean_tool,
+        help="Disable the intermediate lean tool (lean_final is always available).",
+    )
+    p.add_argument(
         "--tir-no-python-tool",
         dest="tir_use_python_tool",
         action="store_false",
@@ -837,6 +846,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         tir_timeout_seconds=args.tir_timeout_seconds,
         tir_use_python_tool=args.tir_use_python_tool,
         tir_lean_workspace_subdir=args.tir_lean_workspace_subdir,
+        tir_use_lean_tool=args.tir_use_lean_tool,
         tir_top_k=args.tir_top_k,
         tir_min_p=args.tir_min_p,
         tir_presence_penalty=args.tir_presence_penalty,

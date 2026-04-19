@@ -112,7 +112,7 @@ class TIRProverAgent:
                 *between* turns (never mid-stream), so there is no partial
                 assistant turn to save — the cutoff is always clean.
                 Requires the backend to have a token counter registered
-                (OllamaTIRConfig.chat_template_path + tokenizer_path).
+                (OllamaTIRConfig.tokenizer_path).
             initial_messages: If provided, resume the session from this saved
                 conversation history rather than starting fresh.  Used by the
                 scheduler to continue an incomplete session from a prior run.
@@ -167,10 +167,58 @@ class TIRProverAgent:
             return build_tool_facing_feedback(result, cfg=lean_cfg)
 
         # ------------------------------------------------------------------ #
+        # lean_final handler — same compilation logic, but marks proved and
+        # signals the model that the proof has been submitted.
+        # ------------------------------------------------------------------ #
+        lean_final_tool_def: Dict[str, Any] = {
+            "type": "function",
+            "function": {
+                "name": "lean_final",
+                "description": self.cfg.lean_final_tool_description,
+                "parameters": {
+                    "type": "object",
+                    "required": ["code"],
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Complete Lean 4 file with sorry replaced by the proof",
+                        }
+                    },
+                },
+            },
+        }
+
+        def lean_final_handle(tool_name: str, arguments: Dict[str, Any]) -> str:
+            code_raw = arguments.get("code", "")
+            code = (
+                extract_lean_code_block_or_text(code_raw)
+                if lean_cfg.auto_extract_code_block
+                else code_raw.strip()
+            )
+            _log("tir_lean_final_start", {"code_chars": len(code)})
+            result = self._lean_tool.backend.compile_code(code)
+            _log("tir_lean_final_done", {
+                "ok": result.ok,
+                "error_count": len(result.json_errors),
+                "warning_count": len(result.json_warnings),
+                "timed_out": result.timed_out,
+                "oom": result.oom,
+                "elapsed_ms": result.elapsed_ms,
+            })
+            if result.ok and not _state["proved"]:
+                _state["proved"] = True
+                _state["proved_lean"] = code
+            return build_tool_facing_feedback(result, cfg=lean_cfg)
+
+        # ------------------------------------------------------------------ #
         # Assemble tools list and handlers
         # ------------------------------------------------------------------ #
-        tools = [self._lean_tool.tool_def]
-        tool_handlers: Dict[str, Any] = {lean_cfg.tool_name: lean_handle}
+        tools = [lean_final_tool_def]
+        tool_handlers: Dict[str, Any] = {"lean_final": lean_final_handle}
+
+        if self.cfg.use_lean_tool:
+            tools.append(self._lean_tool.tool_def)
+            tool_handlers[lean_cfg.tool_name] = lean_handle
 
         # ------------------------------------------------------------------ #
         # Initial messages
