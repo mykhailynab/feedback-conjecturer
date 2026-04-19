@@ -4,6 +4,7 @@ Tests for the utility functions in conjecturing_agents.lean_regex.
 import pytest
 
 from conjecturing_agents.lean_regex import (
+    contains_theorem_signature,
     extract_abbrev_name_from_statement,
     extract_ground_truth_comment_and_strip_line,
     extract_last_abbrev_declaration,
@@ -11,6 +12,7 @@ from conjecturing_agents.lean_regex import (
     extract_lean_code_block_or_text,
     extract_preamble,
     extract_rhs_from_abbrev_declaration,
+    extract_theorem_signature,
     negate_theorem_statement,
     remove_lean_comments,
     replace_abbrev_in_statement,
@@ -554,3 +556,134 @@ class TestNegateTheoremStatement:
         )
         result = negate_theorem_statement(scaffold)
         assert "theorem theorem_foo_neg" in result
+
+
+# ---------------------------------------------------------------------------
+# extract_theorem_signature
+# ---------------------------------------------------------------------------
+
+class TestExtractTheoremSignature:
+    def test_simple_tactic_mode(self):
+        text = "theorem foo (n : ℕ) : n = n := by sorry"
+        sig = extract_theorem_signature(text)
+        assert sig == "theorem foo (n : ℕ) : n = n := by"
+
+    def test_simple_scaffold(self):
+        # SIMPLE_SCAFFOLD uses term-mode `:=\nsorry` (no `by`).
+        sig = extract_theorem_signature(SIMPLE_SCAFFOLD)
+        assert sig is not None
+        assert sig.startswith("theorem putnam_2008_b2")
+        assert sig.rstrip().endswith(":=")
+        assert "Tendsto" in sig
+
+    def test_multiline_args(self):
+        # NONCOMPUTABLE_SCAFFOLD also uses term-mode `:=\nsorry`.
+        sig = extract_theorem_signature(NONCOMPUTABLE_SCAFFOLD)
+        assert sig is not None
+        assert "theorem putnam_1986_a3" in sig
+        assert "(cot : ℝ → ℝ)" in sig
+        assert sig.rstrip().endswith(":=")
+
+    def test_term_mode_sorry(self):
+        text = "theorem foo : True := sorry"
+        sig = extract_theorem_signature(text)
+        assert sig is not None
+        assert sig == "theorem foo : True :="
+
+    def test_preamble_ignored(self):
+        sig = extract_theorem_signature(SIMPLE_SCAFFOLD)
+        assert sig is not None
+        assert not sig.startswith("import")
+        assert "abbrev" not in sig
+
+    def test_no_theorem(self):
+        assert extract_theorem_signature("abbrev foo : ℝ := sorry") is None
+
+    def test_empty(self):
+        assert extract_theorem_signature("") is None
+
+    def test_none_input(self):
+        assert extract_theorem_signature(None) is None  # type: ignore[arg-type]
+
+    def test_set_scaffold(self):
+        sig = extract_theorem_signature(SET_SCAFFOLD)
+        assert sig is not None
+        assert "putnam_1985_a5" in sig
+
+    def test_prop_scaffold_no_args(self):
+        # PROP_SCAFFOLD uses term-mode `:=\n  sorry`.
+        sig = extract_theorem_signature(PROP_SCAFFOLD)
+        assert sig is not None
+        assert "putnam_1995_a5" in sig
+        assert sig.rstrip().endswith(":=")
+
+
+# ---------------------------------------------------------------------------
+# contains_theorem_signature
+# ---------------------------------------------------------------------------
+
+class TestContainsTheoremSignature:
+    def test_exact_match(self):
+        stmt = SIMPLE_SCAFFOLD
+        code = SIMPLE_SCAFFOLD.replace("sorry", "exact foo")
+        assert contains_theorem_signature(stmt, code)
+
+    def test_sorry_replaced_by_tactic_block(self):
+        stmt = "theorem foo (n : ℕ) : n = n := by sorry"
+        code = "theorem foo (n : ℕ) : n = n := by\n  rfl"
+        assert contains_theorem_signature(stmt, code)
+
+    def test_extra_defs_before_theorem(self):
+        stmt = SIMPLE_SCAFFOLD
+        code = (
+            "import Mathlib\n\n"
+            "open Filter Topology Set Nat\n\n"
+            "abbrev putnam_2008_b2_solution : ℝ := sorry\n\n"
+            "lemma helper : True := trivial\n\n"
+            + "\n".join(
+                line for line in SIMPLE_SCAFFOLD.splitlines()
+                if line.strip().startswith("theorem")
+                or "Tendsto" in line
+                or "hF" in line
+                or line.strip().startswith("(")
+                or line.strip().startswith(":")
+                or line.strip() == "sorry"
+            ).replace("sorry", "exact foo")
+        )
+        assert contains_theorem_signature(stmt, code)
+
+    def test_whitespace_normalized(self):
+        # Multi-line args collapsed to single line should still match
+        stmt = NONCOMPUTABLE_SCAFFOLD
+        sig = extract_theorem_signature(stmt)
+        assert sig is not None
+        # Build a version with all whitespace collapsed
+        collapsed_code = " ".join(sig.split()) + " exact foo"
+        assert contains_theorem_signature(stmt, collapsed_code)
+
+    def test_bare_tactic_block_rejected(self):
+        stmt = SIMPLE_SCAFFOLD
+        code = "  rfl\n  done"
+        assert not contains_theorem_signature(stmt, code)
+
+    def test_different_theorem_rejected(self):
+        stmt = SIMPLE_SCAFFOLD
+        code = "theorem different_name : True := by trivial"
+        assert not contains_theorem_signature(stmt, code)
+
+    def test_no_theorem_in_statement(self):
+        stmt = "abbrev foo : ℝ := sorry"
+        code = "abbrev foo : ℝ := 42"
+        assert not contains_theorem_signature(stmt, code)
+
+    def test_multiline_scaffold(self):
+        stmt = NONCOMPUTABLE_SCAFFOLD
+        code = NONCOMPUTABLE_SCAFFOLD.replace(
+            "\nsorry", "\n  exact foo"
+        )
+        assert contains_theorem_signature(stmt, code)
+
+    def test_set_scaffold(self):
+        stmt = SET_SCAFFOLD
+        code = SET_SCAFFOLD.replace("sorry", "exact foo")
+        assert contains_theorem_signature(stmt, code)

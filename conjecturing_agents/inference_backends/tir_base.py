@@ -99,6 +99,11 @@ class TIRSessionResult:
     # so the caller can resume the session in a later run.
     incomplete: bool = False
     messages_at_cutoff: List[Dict[str, Any]] = field(default_factory=list)
+    # Partial assistant turn in progress when the stream was interrupted
+    # (thinking + content accumulated before the cutoff fired).  Separate from
+    # messages_at_cutoff so callers that build a resume conversation do not
+    # need to strip it out themselves.
+    partial_assistant_turn: Optional[Dict[str, Any]] = None
 
 
 # Callable type for a tool handler: receives tool name + arguments, returns string.
@@ -226,6 +231,7 @@ class TIRBackend(ABC):
         final_text = ""
         incomplete = False
         messages_at_cutoff: List[Dict[str, Any]] = []
+        partial_assistant_turn: Optional[Dict[str, Any]] = None
 
         self._log_event("tir_session_start", {
             "max_turns": cfg.max_turns,
@@ -308,7 +314,17 @@ class TIRBackend(ABC):
                     termination_reason = f"exception:{type(exc).__name__}"
                     break
 
-                if stream_interrupted:
+                if stream_interrupted and termination_reason == "token_limit":
+                    # Record the partial assistant turn for logging/debugging.
+                    # Stored separately from messages_at_cutoff so callers that
+                    # build a resume conversation do not need to strip it out.
+                    if thinking or content:
+                        partial_assistant_turn = {
+                            "role": "assistant",
+                            "content": content or None,
+                        }
+                        if thinking:
+                            partial_assistant_turn["thinking"] = thinking
                     break
 
                 if not content and not tool_call_specs:
@@ -414,6 +430,7 @@ class TIRBackend(ABC):
             exception=exception_text,
             incomplete=incomplete,
             messages_at_cutoff=messages_at_cutoff,
+            partial_assistant_turn=partial_assistant_turn,
         )
 
     # ------------------------------------------------------------------

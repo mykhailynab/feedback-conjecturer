@@ -6,16 +6,18 @@ generate / compile / correct rounds), TIRProverAgent lets the model drive
 the iteration itself through native tool calls:
 
   - The model reads the theorem, calls **lean** with proof attempts, reads
-    error diagnostics, and revises until the lean tool reports [OK].
+    error diagnostics, and revises until it submits a successful proof via
+    **lean_final**.
   - Optionally, the model can call **python** for mathematical exploration
     before or during the Lean proof search.
 
 The multi-turn conversation loop and tool dispatch are handled by
 TIRBackend.run_session(); the agent is responsible only for:
   1. Building the initial message list.
-  2. Wiring up the Lean and Python tool handlers.
-  3. Detecting proof success (any Lean call that returned [OK]).
-  4. Returning a TIRProverResult.
+  2. Wiring up the Lean, lean_final, and Python tool handlers.
+  3. Validating lean_final submissions (theorem signature check).
+  4. Detecting proof success and stopping the session immediately.
+  5. Returning a TIRProverResult.
 
 Thread safety
 -------------
@@ -37,6 +39,7 @@ from conjecturing_agents.inference_backends.tir_base import (
     TIRBackend,
     TIRGenerationConfig,
 )
+from conjecturing_agents.lean_regex import contains_theorem_signature
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     Lean4TIRToolBackend,
     build_tool_facing_feedback,
@@ -47,7 +50,7 @@ from conjecturing_agents.tool_calling_backends.jupyter import (
 )
 
 from .config import TIRProverConfig, TIRProverResult
-from .prompts import INITIAL_USER_MESSAGE
+from .prompts import INITIAL_USER_MESSAGE, LEAN_FINAL_MISSING_THEOREM_CORRECTION
 
 
 class TIRProverAgent:
@@ -65,7 +68,7 @@ class TIRProverAgent:
             print(result.proved_lean)
 
     The theorem_statement should be a complete Lean 4 file ending in
-    ``theorem ... := by sorry``.
+    ``theorem ... := by sorry`` or ``theorem ... := sorry``.
     """
 
     def __init__(self, cfg: Optional[TIRProverConfig] = None) -> None:
@@ -108,21 +111,24 @@ class TIRProverAgent:
                 the session terminates early.
             token_limit: Stop the session (marking it incomplete) when the
                 rendered prompt reaches this many tokens.  0 = unlimited.
-                Unlike GoedelProverAgent, TIR checks the token count only
-                *between* turns (never mid-stream), so there is no partial
-                assistant turn to save — the cutoff is always clean.
+                TIR checks the token count both *between* turns (before each
+                LLM call) and *during* streaming (every ~200 chars of generated
+                text), so the cutoff may fire mid-stream. Any partial assistant
+                turn in progress when the limit fires is stored in
+                TIRSessionResult.partial_assistant_turn for logging; it is not
+                included in messages_at_cutoff, so the resumed session restarts
+                cleanly from the beginning of the interrupted turn.
                 Requires the backend to have a token counter registered
                 (OllamaTIRConfig.tokenizer_path).
             initial_messages: If provided, resume the session from this saved
                 conversation history rather than starting fresh.  Used by the
                 scheduler to continue an incomplete session from a prior run.
             partial_response: Not used by TIR.  Accepted for API compatibility
-                with GoedelProverAgent.  Because the token limit always fires
-                between turns, there is never a partial assistant turn to
-                resume from.
+                with GoedelProverAgent.  Unlike GoedelProverAgent, the TIR
+                resume always restarts from the beginning of the interrupted turn.
 
         Returns:
-            TIRProverResult with proved=True iff any lean tool call returned [OK].
+            TIRProverResult with proved=True iff a lean or lean_final tool call returned [OK].
         """
         _meta = metadata or {}
 
@@ -138,6 +144,9 @@ class TIRProverAgent:
         # the container, which is compatible with all Python 3.x scoping rules.
         # ------------------------------------------------------------------ #
         _state: Dict[str, Any] = {"proved": False, "proved_lean": ""}
+        # Event set by lean_final_handle when a proof is accepted; used to
+        # stop the session immediately without starting another LLM turn.
+        _proof_stop = threading.Event()
 
         # ------------------------------------------------------------------ #
         # Lean tool handler — wraps Lean4TIRToolBackend to intercept [OK].
@@ -161,14 +170,14 @@ class TIRProverAgent:
                 "oom": result.oom,
                 "elapsed_ms": result.elapsed_ms,
             })
-            if result.ok and not _state["proved"]:
-                _state["proved"] = True
-                _state["proved_lean"] = code
+            # The lean tool is for intermediate checks only — the model may
+            # compile helper lemmas or partial files that succeed without
+            # proving the full theorem.  Only lean_final sets proved=True.
             return build_tool_facing_feedback(result, cfg=lean_cfg)
 
         # ------------------------------------------------------------------ #
-        # lean_final handler — same compilation logic, but marks proved and
-        # signals the model that the proof has been submitted.
+        # lean_final handler — validates the theorem signature, compiles,
+        # marks proved, and stops the session on success.
         # ------------------------------------------------------------------ #
         lean_final_tool_def: Dict[str, Any] = {
             "type": "function",
@@ -195,6 +204,14 @@ class TIRProverAgent:
                 if lean_cfg.auto_extract_code_block
                 else code_raw.strip()
             )
+            # Verify the submitted file contains the original theorem signature
+            # (whitespace-normalized).  The model must send the complete Lean
+            # file with sorry replaced — not a different theorem or a bare
+            # tactic block.
+            if not contains_theorem_signature(theorem_statement, code):
+                return LEAN_FINAL_MISSING_THEOREM_CORRECTION.format(
+                    theorem_statement=theorem_statement,
+                )
             _log("tir_lean_final_start", {"code_chars": len(code)})
             result = self._lean_tool.backend.compile_code(code)
             _log("tir_lean_final_done", {
@@ -208,6 +225,8 @@ class TIRProverAgent:
             if result.ok and not _state["proved"]:
                 _state["proved"] = True
                 _state["proved_lean"] = code
+                # Stop the session immediately — no further LLM turns needed.
+                _proof_stop.set()
             return build_tool_facing_feedback(result, cfg=lean_cfg)
 
         # ------------------------------------------------------------------ #
@@ -259,6 +278,20 @@ class TIRProverAgent:
         })
 
         # ------------------------------------------------------------------ #
+        # Combined stop event — fires when either a proof is found (lean_final
+        # returned [OK]) or the external stop_event fires.  Passed to
+        # run_session so the session terminates immediately after a successful
+        # proof without starting another LLM turn.
+        # ------------------------------------------------------------------ #
+        class _CombinedStopEvent:
+            def is_set(self) -> bool:
+                return _proof_stop.is_set() or (
+                    stop_event is not None and stop_event.is_set()
+                )
+
+        _combined_stop = _CombinedStopEvent()
+
+        # ------------------------------------------------------------------ #
         # Jupyter tool — created fresh per call for thread safety.
         # Each prove_theorem() call gets its own isolated Python kernel.
         # ------------------------------------------------------------------ #
@@ -280,7 +313,7 @@ class TIRProverAgent:
                 tools=tools,
                 tool_handlers=tool_handlers,
                 cfg=gen_cfg,
-                stop_event=stop_event,
+                stop_event=_combined_stop,
             )
 
         finally:
@@ -331,6 +364,8 @@ class TIRProverAgent:
             # Save the full message list so the scheduler can resume the
             # session via initial_messages in a subsequent --continue run.
             conversation_history=session_result.messages_at_cutoff if incomplete else [],
+            # NOTE: not used in --continue
+            partial_assistant_turn=session_result.partial_assistant_turn,
         )
 
     # ------------------------------------------------------------------

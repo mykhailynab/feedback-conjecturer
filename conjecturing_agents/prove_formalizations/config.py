@@ -14,7 +14,7 @@ class ProveFormalizationsConfig:
     # Input / output
     formalizations_path: str = "logs/conjecture_formalization_logs/formalizations.jsonl"
     output_path: str = ""  # defaults to <formalizations_path parent>/prove_results.jsonl
-    events_path: str = ""  # defaults to <output_path parent>/prove_goedel_events.jsonl
+    events_path: str = ""  # defaults to <output_path parent>/prover_events.jsonl
 
     # Lean compiler (shared by proof and disproof agents)
     lean_project_dir: str = "."
@@ -341,8 +341,8 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         "--events-path",
         default=ProveFormalizationsConfig.events_path,
         help=(
-            "Where to write the raw generation event log (prove_goedel_events.jsonl). "
-            "Defaults to <output_path parent>/prove_goedel_events.jsonl."
+            "Where to write the raw generation event log (prover_events.jsonl). "
+            "Defaults to <output_path parent>/prover_events.jsonl."
         ),
     )
 

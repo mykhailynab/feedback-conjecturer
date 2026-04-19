@@ -85,6 +85,63 @@ BY_CLAUSE_RE = re.compile(r":=\s*by\b", re.MULTILINE)
 TERM_SORRY_RE = re.compile(r":=\s*sorry\b", re.MULTILINE)
 
 # ---------------------------------------------------------------------------
+# Theorem signature extraction / matching
+# ---------------------------------------------------------------------------
+
+def _normalize_whitespace(text: str) -> str:
+    """Collapse all runs of whitespace (including newlines) to a single space."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def extract_theorem_signature(lean_text: str) -> Optional[str]:
+    """Return the theorem signature from a Lean 4 file, or ``None``.
+
+    The signature is everything from the ``theorem`` keyword up to and
+    including the ``:= by`` clause (or ``:=`` for term-mode proofs).  This
+    includes the theorem name, all binder arguments, and the return type.
+
+    Example::
+
+        >>> extract_theorem_signature("import Mathlib\\ntheorem foo (n : ℕ) : n = n := by sorry")
+        'theorem foo (n : ℕ) : n = n := by'
+    """
+    m = THEOREM_NAME_RE.search(lean_text or "")
+    if m is None:
+        return None
+    thm_start = m.start()
+
+    # Prefer `:= by` (tactic mode) over bare `:=` (term mode).
+    by_match = BY_CLAUSE_RE.search(lean_text, thm_start)
+    if by_match is not None:
+        return lean_text[thm_start:by_match.end()].strip()
+
+    # Fall back to term-mode `:=` (e.g. `theorem foo : P := sorry`).
+    term_match = TERM_SORRY_RE.search(lean_text, thm_start)
+    if term_match is not None:
+        # Return up to and including `:=` (not `sorry`).
+        assign_pos = lean_text.rfind(":=", thm_start, term_match.end())
+        if assign_pos >= 0:
+            return lean_text[thm_start:assign_pos + 2].strip()
+
+    return None
+
+
+def contains_theorem_signature(lean_text: str, submitted_code: str) -> bool:
+    """Check whether *submitted_code* contains the theorem signature from *lean_text*.
+
+    Both strings are whitespace-normalized before comparison so that
+    reformatting (e.g. collapsing multi-line binders onto one line) does
+    not cause a false negative.
+
+    Returns ``False`` if *lean_text* contains no recognisable theorem.
+    """
+    sig = extract_theorem_signature(lean_text)
+    if sig is None:
+        return False
+    return _normalize_whitespace(sig) in _normalize_whitespace(submitted_code)
+
+
+# ---------------------------------------------------------------------------
 # Fenced code block patterns
 # ---------------------------------------------------------------------------
 

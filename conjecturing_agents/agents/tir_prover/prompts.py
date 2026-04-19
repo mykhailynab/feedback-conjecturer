@@ -99,6 +99,20 @@ Best Practices:
 """
 
 # Formatted with theorem_statement=...
+# Used by lean_final_handle when the submitted code does not contain the
+# theorem signature from the original problem.
+LEAN_FINAL_MISSING_THEOREM_CORRECTION = """\
+[ERROR] The submitted Lean 4 file does not contain the required theorem statement.
+
+You must submit the complete Lean 4 file from the initial user message with \
+`sorry` replaced by a valid proof — not a different file or a bare tactic block.
+
+Required file (replace `sorry` with your proof):
+```lean4
+{theorem_statement}
+```\
+"""
+
 INITIAL_USER_MESSAGE = """\
 Please prove the following theorem. Replace the `sorry` placeholder with a valid \
 Lean 4 proof and submit it with lean_final.

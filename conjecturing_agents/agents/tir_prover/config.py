@@ -70,9 +70,13 @@ class TIRProverResult:
     # Scheduler-compatibility fields (mirror GoedelProverResult layout so
     # the existing scheduler and _extract_resume_state work unchanged).
     # ------------------------------------------------------------------ #
-    # TIR sessions are not interrupted mid-stream, so incomplete is always
-    # False and the resume fields are always empty.
     incomplete: bool = False
     total_context_tokens: int = 0
     conversation_history: List[Dict[str, Any]] = field(default_factory=list)
     partial_response: str = ""
+
+    # Partial assistant turn that was in progress when the stream was
+    # interrupted (e.g. by the token limit).  Logged for debugging but not
+    # used for resume — TIR always restarts from the beginning of the
+    # interrupted turn.
+    partial_assistant_turn: Optional[Dict[str, Any]] = None
