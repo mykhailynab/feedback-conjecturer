@@ -11,7 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-OUTPUT="goedel_check_package.zip"
+OUTPUT="prover_package.zip"
 rm -f "$OUTPUT"
 
 echo "Collecting files..."

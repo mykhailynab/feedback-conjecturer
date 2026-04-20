@@ -3,12 +3,12 @@
 # Example: bash scp_zip.sh ssh -i ~/.ssh/vastai -p 7267 root@82.141.118.38 -L 8080:localhost:8080
 #
 # Extracts host, port, identity file, and user from the ssh command and prints
-# the equivalent scp command for goedel_check_package.zip.
+# the equivalent scp command for prover_package.zip.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ZIP="$SCRIPT_DIR/goedel_check_package.zip"
+ZIP="$SCRIPT_DIR/prover_package.zip"
 
 [[ $# -eq 0 ]] && { echo "Usage: $0 <ssh command>"; exit 1; }
 
