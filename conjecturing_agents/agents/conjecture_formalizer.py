@@ -23,7 +23,7 @@ from conjecturing_agents.lean_regex import (
 )
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     LeanCompilerConfig,
-    Lean4CompilerToolBackend,
+    Lean4CompilerToolHarmonyAdapter,
 )
 
 
@@ -187,12 +187,12 @@ class ConjectureFormalizerAgent:
         cfg: Optional[ConjectureFormalizerConfig] = None,
         *,
         jupyter_backend: Optional[JupyterToolBackend] = None,
-        lean_backend: Optional[Lean4CompilerToolBackend] = None,
+        lean_backend: Optional[Lean4CompilerToolHarmonyAdapter] = None,
     ):
         self.cfg = cfg or ConjectureFormalizerConfig()
 
         self.jupyter_backend: Optional[JupyterToolBackend] = None
-        self.lean_backend: Optional[Lean4CompilerToolBackend] = None
+        self.lean_backend: Optional[Lean4CompilerToolHarmonyAdapter] = None
 
         if self.cfg.use_python_tool:
             self.jupyter_backend = jupyter_backend or JupyterToolBackend(
@@ -209,7 +209,7 @@ class ConjectureFormalizerAgent:
                         "ConjectureFormalizerConfig.use_lean_tool=True but no lean backend "
                         "and no cfg.lean were provided"
                     )
-                self.lean_backend = Lean4CompilerToolBackend(
+                self.lean_backend = Lean4CompilerToolHarmonyAdapter(
                     description=self.cfg.lean_tool_prompt,
                     cfg=self.cfg.lean,
                 )

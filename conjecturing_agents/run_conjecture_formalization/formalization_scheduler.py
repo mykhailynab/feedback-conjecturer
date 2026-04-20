@@ -22,10 +22,8 @@ from conjecturing_agents.run_conjecture_formalization.config import (
 from conjecturing_agents.run_conjecture_formalization.logger import (
     RunLogger,
 )
-from conjecturing_agents.tool_calling_backends.lean4_compiler import (
-    Lean4CompilerBackend,
-    build_tool_facing_feedback,
-)
+from conjecturing_agents.tool_calling_backends.lean4_compiler import Lean4CompilerBackend
+from conjecturing_agents.tool_calling_backends.lean4_compiler.prompt_formatting import build_tool_facing_feedback
 
 
 def _now_iso() -> str:
