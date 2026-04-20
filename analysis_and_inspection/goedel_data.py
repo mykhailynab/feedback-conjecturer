@@ -184,7 +184,7 @@ def load_goedel_sessions(goedel_events_path: str) -> List[ProverSession]:
 
 def load_prove_sessions(goedel_events_path: str) -> List[ProverSession]:
     """
-    Build ProverSession objects from prove_goedel_events.jsonl.
+    Build ProverSession objects from prover_events.jsonl.
 
     Groups events by (problem_id, attempt, direction, retry).
     The ``checking`` field is populated from ``direction`` ("proof"/"disproof").

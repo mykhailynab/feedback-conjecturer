@@ -2,12 +2,12 @@
 """
 Inspect prove_formalizations runs: session traces and summary statistics.
 
-Reads prove_goedel_events.jsonl and prove_results.jsonl to display per-session
+Reads prover_events.jsonl and prove_results.jsonl to display per-session
 conversation traces and/or aggregate statistics.
 
 Usage:
     PYTHONPATH=. python -m analysis_and_inspection.inspect_prove_formalizations \\
-        --goedel-events logs/.../prove_goedel_events.jsonl \\
+        --goedel-events logs/.../prover_events.jsonl \\
         --results       logs/.../prove_results.jsonl \\
         [--trace]                          # show conversation traces (off by default)
         [--filter  proof|disproof|proved|failed|disproved|incomplete] \\
@@ -60,7 +60,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--goedel-events", required=True,
-                   help="Path to prove_goedel_events.jsonl.")
+                   help="Path to prover_events.jsonl.")
     p.add_argument("--results", required=True,
                    help="Path to prove_results.jsonl.")
     p.add_argument("--trace", action="store_true", default=False,

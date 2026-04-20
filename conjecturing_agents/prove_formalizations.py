@@ -58,7 +58,7 @@ def main() -> None:
     )
 
     events_path = cfg.events_path or str(
-        Path(output_path).parent / "prove_goedel_events.jsonl"
+        Path(output_path).parent / "prover_events.jsonl"
     )
     event_logger = ProveFormalizationsLogger(events_path)
 
