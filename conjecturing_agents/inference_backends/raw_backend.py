@@ -58,7 +58,7 @@ class RawBackend(ABC):
 
     Implementors:
       - ``VLLMRawBackend``  (vllm_raw.py)
-      - ``OllamaBackend``   (ollama_backend.py)
+      - ``OllamaBackend``   (ollama_raw.py)
     """
 
     # Set to True via set_verbose() to print prompts and tokens to stdout.
