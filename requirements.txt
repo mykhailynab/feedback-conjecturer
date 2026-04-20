@@ -1,3 +1,4 @@
+llama-cpp-python
 openai
 openai_harmony
 polars
@@ -12,4 +13,4 @@ ollama
 gdown
 torch
 pytest
-vllm
+# vllm
