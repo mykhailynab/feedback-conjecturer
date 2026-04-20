@@ -160,7 +160,7 @@ class OllamaTIRBackend(TIRBackend):
                     add_generation_prompt=True,
                 ))
             else:
-                print("WARN: No tokenizer availabe. Falling back.")
+                print("[OllamaTIRBackend: verbose] WARN: No tokenizer availabe. Falling back.")
                 for m in messages:
                     role = m.get("role", "?")
                     body = str(m.get("content") or "")
