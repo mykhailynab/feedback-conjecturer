@@ -9,7 +9,7 @@ from conjecturing_agents.agents.conjecture_formalizer import (
 )
 from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
-    Lean4CompilerBackend,
+    LeanCompilerBackend,
     LeanCompilerConfig,
 )
 
@@ -119,7 +119,7 @@ class AnswerChecker:
     ):
         self.cfg = cfg or AnswerCheckerConfig()
         self._event_logger = event_logger
-        self._compiler: Optional[Lean4CompilerBackend] = None
+        self._compiler: Optional[LeanCompilerBackend] = None
         self._goedel_agent = None
         # If an external backend is injected, use it; do not close it on close().
         self._goedel_backend = goedel_backend
@@ -129,7 +129,7 @@ class AnswerChecker:
     # Lean compiler — lazy init (heuristic 2)
     # ------------------------------------------------------------------
 
-    def _get_compiler(self) -> Lean4CompilerBackend:
+    def _get_compiler(self) -> LeanCompilerBackend:
         if self._compiler is None:
             lean_cfg = LeanCompilerConfig(
                 project_dir=self.cfg.lean_project_dir,
@@ -140,7 +140,7 @@ class AnswerChecker:
                 treat_sorry_warning_as_failure=True,
                 treat_any_warning_as_failure=False,
             )
-            self._compiler = Lean4CompilerBackend(lean_cfg)
+            self._compiler = LeanCompilerBackend(lean_cfg)
         return self._compiler
 
     # ------------------------------------------------------------------

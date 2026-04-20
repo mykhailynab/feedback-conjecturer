@@ -20,7 +20,7 @@ from conjecturing_agents.lean_regex import (
     replace_abbrev_in_statement,
 )
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
-    Lean4CompilerBackend,
+    LeanCompilerBackend,
     LeanCompilerConfig,
 )
 
@@ -111,7 +111,7 @@ def extract_last_abbrev_declaration_from_text(
 # ============================================================
 
 def compile_candidate_abbrev(
-    lean_backend: Lean4CompilerBackend,
+    lean_backend: LeanCompilerBackend,
     *,
     lean_statement_without_comment: str,
     required_abbrev_name: str,
@@ -166,7 +166,7 @@ def try_repair_round(
     *,
     lean_statement_without_comment: str,
     required_abbrev_name: str,
-    lean_backend: Lean4CompilerBackend,
+    lean_backend: LeanCompilerBackend,
     compile_cache: Dict[str, CompileCacheValue],
     cache_stats: Dict[str, int],
 ) -> Optional[Dict[str, Any]]:
@@ -228,7 +228,7 @@ def choose_best_successful_round(rounds: List[Dict[str, Any]]) -> Optional[Tuple
 def repair_record(
     record: Dict[str, Any],
     *,
-    lean_backend: Lean4CompilerBackend,
+    lean_backend: LeanCompilerBackend,
     compile_cache: Dict[str, CompileCacheValue],
     cache_stats: Dict[str, int],
     print_fixes: bool,
@@ -386,7 +386,7 @@ def main() -> None:
         auto_extract_code_block=True,
         cleanup_source_file=False,
     )
-    lean_backend = Lean4CompilerBackend(lean_cfg)
+    lean_backend = LeanCompilerBackend(lean_cfg)
 
     compile_cache: Dict[str, CompileCacheValue] = {}
     cache_stats = {

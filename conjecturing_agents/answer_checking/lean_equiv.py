@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from conjecturing_agents.lean_regex import extract_preamble
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
-    Lean4CompilerBackend,
+    LeanCompilerBackend,
     LeanCompileResult,
 )
 
@@ -62,7 +62,7 @@ def check_lean_equiv(
     proposed_abbrev_decl: str,
     gt_rhs: str,
     abbrev_name: str,
-    compiler: Lean4CompilerBackend,
+    compiler: LeanCompilerBackend,
 ) -> CheckResult:
     """
     Heuristic 2: try to prove ``proposed = gt`` in Lean using a set of
@@ -82,7 +82,7 @@ def check_lean_equiv(
     abbrev_name:
         The abbrev identifier (e.g. ``foo_solution``).
     compiler:
-        A ready-to-use ``Lean4CompilerBackend`` instance.
+        A ready-to-use ``LeanCompilerBackend`` instance.
     """
     attempts: list[dict] = []
 

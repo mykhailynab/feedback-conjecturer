@@ -21,7 +21,7 @@ TIRBackend.run_session(); the agent is responsible only for:
 
 Thread safety
 -------------
-The Lean tool backend (Lean4CompilerToolAdapter) is stateless and owned by the
+The Lean tool backend (LeanCompilerToolAdapter) is stateless and owned by the
 agent instance — safe to share across concurrent prove_theorem() calls.
 The Jupyter kernel backend is created fresh for each prove_theorem() call
 and closed in a finally block, so concurrent calls each have their own
@@ -40,7 +40,7 @@ from conjecturing_agents.inference_backends.tir_base import (
     TIRGenerationConfig,
 )
 from conjecturing_agents.lean_regex import contains_theorem_signature
-from conjecturing_agents.tool_calling_backends.lean4_compiler import Lean4CompilerToolAdapter
+from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerToolAdapter
 from conjecturing_agents.tool_calling_backends.lean4_compiler.prompt_formatting import build_tool_facing_feedback
 from conjecturing_agents.lean_regex import extract_lean_code_block_or_text
 from conjecturing_agents.tool_calling_backends.jupyter import (
@@ -74,7 +74,7 @@ class TIRProverAgent:
         if self.cfg.lean is None:
             raise ValueError("TIRProverConfig.lean must be set")
 
-        self._lean_tool = Lean4CompilerToolAdapter(
+        self._lean_tool = LeanCompilerToolAdapter(
             description=self.cfg.lean_tool_description,
             cfg=self.cfg.lean,
         )
@@ -147,7 +147,7 @@ class TIRProverAgent:
         _proof_stop = threading.Event()
 
         # ------------------------------------------------------------------ #
-        # Lean tool handler — wraps Lean4CompilerToolAdapter to intercept [OK].
+        # Lean tool handler — wraps LeanCompilerToolAdapter to intercept [OK].
         # ------------------------------------------------------------------ #
         lean_cfg = self._lean_tool.cfg
 

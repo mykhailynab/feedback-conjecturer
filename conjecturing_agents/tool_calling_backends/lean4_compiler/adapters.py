@@ -13,7 +13,7 @@ from .data_model import (
     LeanCompilerConfig, LeanCompileResult
 )
 
-from .backend import Lean4CompilerBackend
+from .backend import LeanCompilerBackend
 
 from conjecturing_agents.lean_regex import (
     extract_lean_code_block_or_text,
@@ -26,13 +26,13 @@ from .prompt_formatting import build_tool_facing_feedback
 # Harmony adapter
 # ============================================================
 
-class Lean4CompilerToolHarmonyAdapter:
+class LeanCompilerToolHarmonyAdapter:
     """
     Harmony tool adapter for Lean compilation.
 
     Typical usage:
 
-        lean_tool = Lean4CompilerToolHarmonyAdapter(
+        lean_tool = LeanCompilerToolHarmonyAdapter(
             description="Use this tool to compile Lean 4 code..."
             cfg=LeanCompilerConfig(project_dir="/path/to/project"),
         )
@@ -54,7 +54,7 @@ class Lean4CompilerToolHarmonyAdapter:
     ):
         self.description = description
         self.cfg = cfg
-        self.backend = Lean4CompilerBackend(cfg)
+        self.backend = LeanCompilerBackend(cfg)
         self.request_extractor = request_extractor
         self.record_extra = record_extra
 
@@ -86,7 +86,7 @@ class Lean4CompilerToolHarmonyAdapter:
     def close(self) -> None:
         self.backend.close()
 
-    def __enter__(self) -> "Lean4CompilerToolHarmonyAdapter":
+    def __enter__(self) -> "LeanCompilerToolHarmonyAdapter":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -105,7 +105,7 @@ class Lean4CompilerToolHarmonyAdapter:
     def handle_invocation(self, invocation: ToolInvocation) -> ToolDispatchResult:
         if invocation.recipient != self.cfg.recipient_name:
             raise ValueError(
-                f"Lean4CompilerToolHarmonyAdapter received recipient={invocation.recipient!r}, "
+                f"LeanCompilerToolHarmonyAdapter received recipient={invocation.recipient!r}, "
                 f"expected {self.cfg.recipient_name!r}"
             )
 
@@ -173,7 +173,7 @@ class Lean4CompilerToolHarmonyAdapter:
 # TIR adapter (non-Harmony)
 # ============================================================
 
-class Lean4CompilerToolAdapter:
+class LeanCompilerToolAdapter:
     """
     TIR (non-Harmony) adapter for Lean 4 compilation.
 
@@ -183,7 +183,7 @@ class Lean4CompilerToolAdapter:
 
     Typical usage:
 
-        lean_tir = Lean4CompilerToolAdapter(
+        lean_tir = LeanCompilerToolAdapter(
             description="Compile and check Lean 4 code ...",
             cfg=LeanCompilerConfig(project_dir="/path/to/project"),
         )
@@ -204,7 +204,7 @@ class Lean4CompilerToolAdapter:
     ) -> None:
         self.description = description
         self.cfg = cfg
-        self.backend = Lean4CompilerBackend(cfg)
+        self.backend = LeanCompilerBackend(cfg)
 
     @property
     def tool_def(self) -> Dict[str, Any]:
@@ -250,7 +250,7 @@ class Lean4CompilerToolAdapter:
         timeout_seconds: Optional[int] = None,
         relative_path: Optional[str] = None,
     ) -> LeanCompileResult:
-        """Direct compilation bypass (same as Lean4CompilerToolHarmonyAdapter.compile_code)."""
+        """Direct compilation bypass (same as LeanCompilerToolHarmonyAdapter.compile_code)."""
         return self.backend.compile_code(
             code,
             timeout_seconds=timeout_seconds,
@@ -260,7 +260,7 @@ class Lean4CompilerToolAdapter:
     def close(self) -> None:
         self.backend.close()
 
-    def __enter__(self) -> "Lean4CompilerToolAdapter":
+    def __enter__(self) -> "LeanCompilerToolAdapter":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

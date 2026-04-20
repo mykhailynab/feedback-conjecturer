@@ -4,17 +4,17 @@ from .data_model import (
     LeanCompilerConfig
 )
 
-from .backend import Lean4CompilerBackend
+from .backend import LeanCompilerBackend
 
 from .adapters import (
-    Lean4CompilerToolHarmonyAdapter,
-    Lean4CompilerToolAdapter
+    LeanCompilerToolHarmonyAdapter,
+    LeanCompilerToolAdapter
 )
 
 __all__ = [
     "LeanCompileResult",
     "LeanCompilerConfig",
-    "Lean4CompilerBackend",
-    "Lean4CompilerToolHarmonyAdapter",
-    "Lean4CompilerToolAdapter",
+    "LeanCompilerBackend",
+    "LeanCompilerToolHarmonyAdapter",
+    "LeanCompilerToolAdapter",
 ]

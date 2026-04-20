@@ -22,7 +22,7 @@ from conjecturing_agents.run_conjecture_formalization.config import (
 from conjecturing_agents.run_conjecture_formalization.logger import (
     RunLogger,
 )
-from conjecturing_agents.tool_calling_backends.lean4_compiler import Lean4CompilerBackend
+from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerBackend
 from conjecturing_agents.tool_calling_backends.lean4_compiler.prompt_formatting import build_tool_facing_feedback
 
 
@@ -149,7 +149,7 @@ class FormalizationScheduler:
             self.extracted_rows_by_informal_statement.setdefault(informal_statement, []).append(dict(row))
 
         self.validation_lean_cfg = make_lean_compiler_config(cfg)
-        self.validation_lean_backend = Lean4CompilerBackend(self.validation_lean_cfg)
+        self.validation_lean_backend = LeanCompilerBackend(self.validation_lean_cfg)
 
     # --------------------------------------------------------
     # Resolution helpers

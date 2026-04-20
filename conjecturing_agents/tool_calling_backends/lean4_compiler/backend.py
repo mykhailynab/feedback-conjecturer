@@ -16,7 +16,7 @@ from json_helpers import parse_lean_json_stdout
 from prompt_formatting import format_lean_messages
 
 
-class Lean4CompilerBackend:
+class LeanCompilerBackend:
     """
     Low-level Lean 4 compiler runner.
 
@@ -190,5 +190,5 @@ class Lean4CompilerBackend:
         return None
 
 __all__ = [
-    "Lean4CompilerBackend"
+    "LeanCompilerBackend"
 ]

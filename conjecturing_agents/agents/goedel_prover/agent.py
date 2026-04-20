@@ -12,7 +12,7 @@ from conjecturing_agents.inference_backends.raw_backend import (
     RawBackend,
     RawGenerationConfig,
 )
-from conjecturing_agents.tool_calling_backends.lean4_compiler import Lean4CompilerBackend
+from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerBackend
 
 from .config import GoedelProverConfig, GoedelProverResult
 from .lean_utils import (
@@ -45,7 +45,7 @@ class GoedelProverAgent:
         self.cfg = cfg or GoedelProverConfig()
         if self.cfg.lean is None:
             raise ValueError("GoedelProverConfig.lean must be set")
-        self.lean_backend = Lean4CompilerBackend(self.cfg.lean)
+        self.lean_backend = LeanCompilerBackend(self.cfg.lean)
         self._tokenizer = None
 
     # ------------------------------------------------------------------
