@@ -250,7 +250,7 @@ class LeanCompilerToolAdapter:
         timeout_seconds: Optional[int] = None,
         relative_path: Optional[str] = None,
     ) -> LeanCompileResult:
-        """Direct compilation bypass (same as LeanCompilerToolHarmonyAdapter.compile_code)."""
+        """Direct compilation bypass to the backend."""
         return self.backend.compile_code(
             code,
             timeout_seconds=timeout_seconds,
