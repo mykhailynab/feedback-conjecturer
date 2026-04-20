@@ -20,7 +20,7 @@ from typing import Iterator, List, Optional
 
 from openai import OpenAI
 
-from .raw_backend import RawBackend, RawGenerationConfig, RawGenerationResult
+from .raw_base import RawBackend, RawGenerationConfig, RawGenerationResult
 
 
 @dataclass

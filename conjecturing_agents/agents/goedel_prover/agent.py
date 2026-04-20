@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from conjecturing_agents.inference_backends.raw_backend import (
+from conjecturing_agents.inference_backends.raw_base import (
     EventLoggerFn,
     RawBackend,
     RawGenerationConfig,

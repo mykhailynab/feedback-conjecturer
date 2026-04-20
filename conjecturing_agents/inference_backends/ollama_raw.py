@@ -18,7 +18,7 @@ from typing import Iterator, Optional
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 
-from .raw_backend import RawBackend, RawGenerationConfig, RawGenerationResult
+from .raw_base import RawBackend, RawGenerationConfig, RawGenerationResult
 
 
 @dataclass

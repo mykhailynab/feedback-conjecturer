@@ -230,13 +230,13 @@ def make_goedel_backend(cfg: ProveFormalizationsConfig):
             extra_server_args=cfg.goedel_vllm_extra_server_args,
         ))
 
-    from conjecturing_agents.inference_backends.ollama_backend import (
+    from conjecturing_agents.inference_backends.ollama_raw import (
         OllamaBackend,
         OllamaConfig,
     )
 
     if cfg.goedel_ollama_hosts:
-        from conjecturing_agents.inference_backends.load_balanced_backend import (
+        from conjecturing_agents.inference_backends.load_balanced_backend_raw import (
             LoadBalancedRawBackend,
         )
         sub_backends = [

@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
-from .raw_backend import EventLoggerFn
+from .raw_base import EventLoggerFn
 
 
 # ============================================================

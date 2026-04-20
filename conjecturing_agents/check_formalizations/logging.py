@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn  # re-export
+from conjecturing_agents.inference_backends.raw_base import EventLoggerFn  # re-export
 
 
 def _now_iso() -> str:

@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from conjecturing_agents.agents.conjecture_formalizer import (
     extract_rhs_from_abbrev_declaration,
 )
-from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import EventLoggerFn
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     LeanCompilerBackend,
     LeanCompilerConfig,
@@ -204,7 +204,7 @@ class AnswerChecker:
                         extra_server_args=self.cfg.goedel_vllm_extra_server_args,
                     ))
                 else:
-                    from conjecturing_agents.inference_backends.ollama_backend import (
+                    from conjecturing_agents.inference_backends.ollama_raw import (
                         OllamaBackend,
                         OllamaConfig,
                     )

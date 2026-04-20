@@ -21,7 +21,7 @@ import dataclasses
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import EventLoggerFn
 from conjecturing_agents.inference_backends.tir_base import (
     TIRBackend,
     TIRGenerationConfig,

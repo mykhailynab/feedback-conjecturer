@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from conjecturing_agents.agents.goedel_prover import GoedelProverAgent
 from conjecturing_agents.answer_checking.lean_equiv import extract_preamble
-from conjecturing_agents.inference_backends.raw_backend import EventLoggerFn, RawBackend
+from conjecturing_agents.inference_backends.raw_base import EventLoggerFn, RawBackend
 
 from .result import CheckResult
 

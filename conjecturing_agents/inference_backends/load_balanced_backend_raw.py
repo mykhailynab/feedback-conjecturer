@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 from typing import Iterator, List, Optional, Tuple
 
-from .raw_backend import RawBackend, RawGenerationConfig, RawGenerationResult
+from .raw_base import RawBackend, RawGenerationConfig, RawGenerationResult
 
 
 class LoadBalancedRawBackend(RawBackend):

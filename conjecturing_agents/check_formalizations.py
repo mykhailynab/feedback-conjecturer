@@ -98,11 +98,11 @@ def main() -> None:
     # per-host concurrency limits are enforced globally.
     shared_goedel_backend = None
     if checker_cfg.use_goedel_prover and cfg.goedel_ollama_hosts:
-        from conjecturing_agents.inference_backends.ollama_backend import (
+        from conjecturing_agents.inference_backends.ollama_raw import (
             OllamaBackend,
             OllamaConfig,
         )
-        from conjecturing_agents.inference_backends.load_balanced_backend import (
+        from conjecturing_agents.inference_backends.load_balanced_backend_raw import (
             LoadBalancedRawBackend,
         )
         sub_backends = [

@@ -39,7 +39,7 @@ from conjecturing_agents.agents.tir_prover import (
     TIRProverAgent,
     TIRProverResult,
 )
-from conjecturing_agents.inference_backends.raw_backend import RawBackend, EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import RawBackend, EventLoggerFn
 from conjecturing_agents.inference_backends.tir_base import TIRBackend
 
 ProverAgent = Union[GoedelProverAgent, TIRProverAgent]
