@@ -53,6 +53,7 @@ class TIRToolCallSpec:
 
     name: str
     arguments: Dict[str, Any]
+    id: str = ""
 
 
 @dataclass
@@ -352,10 +353,12 @@ class TIRBackend(ABC):
                         "content": content or None,
                         "tool_calls": [
                             {
+                                "id": tc.id,
+                                "type": "function",
                                 "function": {
                                     "name": tc.name,
                                     "arguments": tc.arguments,
-                                }
+                                },
                             }
                             for tc in tool_call_specs
                         ],
@@ -392,6 +395,7 @@ class TIRBackend(ABC):
 
                         messages.append({
                             "role": "tool",
+                            "tool_call_id": tc.id,
                             "name": tc.name,
                             "content": result_text,
                         })

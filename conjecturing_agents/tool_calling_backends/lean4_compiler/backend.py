@@ -11,9 +11,9 @@ from .data_model import (
     LeanCompilerConfig, LeanCompileResult
 )
 
-from json_helpers import parse_lean_json_stdout
+from .json_helpers import parse_lean_json_stdout
 
-from prompt_formatting import format_lean_messages
+from .prompt_formatting import format_lean_messages
 
 
 class LeanCompilerBackend:

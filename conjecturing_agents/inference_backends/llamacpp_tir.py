@@ -1,10 +1,15 @@
 """
-Ollama TIR (Tool-Integrated Reasoning) inference backend.
+llama.cpp TIR (Tool-Integrated Reasoning) inference backend.
 
-Implements TIRBackend.chat_streaming() using Ollama's native chat API with:
-  - Structured tool/function-call support (JSON schema definitions)
-  - Extended thinking via think=True (for models that support it, e.g. qwen3)
-  - Streaming with stop_event support, matching the pattern in OllamaBackend
+Implements TIRBackend.chat_streaming() using llama.cpp's OpenAI-compatible
+/v1/chat/completions endpoint with:
+  - Streaming tool call support (index-based delta accumulation)
+  - Native reasoning_content support (like Deepseek API)
+  - stop_event support for cancellation
+
+Sampling parameters (top_k, min_p, repeat_penalty) are configured at
+llama-server startup time, not per-request.  Only standard OpenAI params
+(temperature, top_p, presence_penalty, max_tokens, seed) are sent per-request.
 
 The multi-turn tool dispatch loop is inherited from TIRBackend.run_session().
 """
@@ -14,78 +19,54 @@ import json
 import time
 import threading
 from dataclasses import dataclass
-from transformers import AutoTokenizer
 from typing import Any, Dict, Iterator, List, Optional
 
-import ollama
+import httpx
+import openai
 
 from .tir_base import TIRBackend, TIRGenerationConfig, TIRStreamChunk, TIRToolCallSpec, TIRTokenCounter
 
 
 @dataclass
-class OllamaTIRConfig:
+class LlamaCppTIRConfig:
     # ------------------------------------------------------------------ #
-    # Model / server
+    # Server
     # ------------------------------------------------------------------ #
-    model: str = "qwen3.5"
-    host: str = "http://localhost:11434"
+    base_url: str = "http://localhost:8080"  # without /v1
+    model: str = ""
+    api_key: str = "sk-no-key-required"
     client_timeout: int = 960
 
     # ------------------------------------------------------------------ #
-    # Enable extended thinking for models that support it (e.g. qwen3).
-    # When True, the backend passes think=True to client.chat() and
-    # thinking text is included in TIRStreamChunk.thinking.
+    # Per-request sampling (standard OpenAI params).
+    # Non-standard params (top_k, min_p, repeat_penalty) must be set at
+    # llama-server startup and are NOT sent per-request.
     # ------------------------------------------------------------------ #
-    think: bool = True
-
-    # ------------------------------------------------------------------ #
-    # Sampling parameters (passed to Ollama options).
-    # ------------------------------------------------------------------ #
-    top_k: int = -1           # -1 = disabled
-    min_p: float = 0.0        # 0.0 = disabled
     presence_penalty: float = 0.0
-    repeat_penalty: float = 1.0   # 1.0 = disabled
 
     # ------------------------------------------------------------------ #
     # Token counting (required for --limit-prover-tokens support).
-    # When set, the backend uses the tokenizer's built-in chat template via
-    # apply_chat_template(tokenize=True) — no separate Jinja template needed.
     # ------------------------------------------------------------------ #
-    # Path to the HuggingFace tokenizer directory for this model
-    # (e.g. "tokenizers/Qwen3.5-27B").
     tokenizer_path: str = ""
 
 
-class OllamaTIRBackend(TIRBackend):
+class LlamaCppTIRBackend(TIRBackend):
     """
-    Ollama-backed TIR backend.
+    llama.cpp-backed TIR backend using the OpenAI-compatible chat endpoint.
 
     Streams one assistant turn per chat_streaming() call; the multi-turn
     tool dispatch loop is inherited from TIRBackend.run_session().
 
-    Tool definitions must follow the OpenAI/Ollama JSON schema format:
-
-        {
-            "type": "function",
-            "function": {
-                "name": "my_tool",
-                "description": "...",
-                "parameters": {
-                    "type": "object",
-                    "required": ["code"],
-                    "properties": {
-                        "code": {"type": "string", "description": "..."}
-                    }
-                }
-            }
-        }
+    Tool definitions must follow the OpenAI JSON schema format (same as
+    OllamaTIRBackend).
     """
 
-    def __init__(self, cfg: OllamaTIRConfig) -> None:
+    def __init__(self, cfg: LlamaCppTIRConfig) -> None:
         self.cfg = cfg
-        self._client: Optional[ollama.Client] = None
+        self._client: Optional[openai.OpenAI] = None
         self._tokenizer = None
         if cfg.tokenizer_path:
+            from transformers import AutoTokenizer
             counter = TIRTokenCounter(tokenizer_path=cfg.tokenizer_path)
             self.set_token_counter(counter.count)
             self.set_text_counter(counter.count_text)
@@ -95,11 +76,12 @@ class OllamaTIRBackend(TIRBackend):
     # Client (lazy)
     # ------------------------------------------------------------------
 
-    def _get_client(self) -> ollama.Client:
+    def _get_client(self) -> openai.OpenAI:
         if self._client is None:
-            self._client = ollama.Client(
-                host=self.cfg.host,
-                timeout=self.cfg.client_timeout,
+            self._client = openai.OpenAI(
+                base_url=self.cfg.base_url.rstrip("/") + "/v1",
+                api_key=self.cfg.api_key,
+                timeout=httpx.Timeout(self.cfg.client_timeout),
             )
         return self._client
 
@@ -115,27 +97,15 @@ class OllamaTIRBackend(TIRBackend):
         stop_event: Optional[threading.Event] = None,
     ) -> Iterator[TIRStreamChunk]:
         """
-        Stream one assistant turn using Ollama's chat API.
+        Stream one assistant turn using llama.cpp's OpenAI-compatible endpoint.
 
-        Yields TIRStreamChunk objects as thinking/content arrive.  Any tool
-        calls produced by the model are accumulated and emitted in a final
-        TIRStreamChunk after the stream ends (tool calls come complete on the
-        last stream chunk from Ollama).
+        Yields TIRStreamChunk objects as reasoning/content arrive.  Tool calls
+        are accumulated from streaming deltas (index-based) and emitted in a
+        final TIRStreamChunk after the stream ends.
 
         The stop_event is checked between every received chunk.
         """
         client = self._get_client()
-
-        options: Dict[str, Any] = {
-            "seed": cfg.seed,
-            "temperature": cfg.temperature,
-            "top_p": cfg.top_p,
-            "num_predict": cfg.max_tokens,
-            "top_k": self.cfg.top_k,
-            "min_p": self.cfg.min_p,
-            "presence_penalty": self.cfg.presence_penalty,
-            "repeat_penalty": self.cfg.repeat_penalty,
-        }
 
         self._log_event("tir_chat_stream_start", {
             "model": self.cfg.model,
@@ -160,30 +130,31 @@ class OllamaTIRBackend(TIRBackend):
                     add_generation_prompt=True,
                 ))
             else:
-                print("[OllamaTIRBackend: verbose] WARN: No tokenizer availabe. Falling back.")
                 for m in messages:
                     role = m.get("role", "?")
                     body = str(m.get("content") or "")
                     print(f"[{role}] {body}", flush=True)
-                
             print(f"{'='*60}\n[TIR GENERATION]\n{'='*60}", flush=True)
 
-        chat_kwargs: Dict[str, Any] = {
+        create_kwargs: Dict[str, Any] = {
             "model": self.cfg.model,
             "messages": messages,
-            "tools": tools if tools else None,
             "stream": True,
-            "options": options,
+            "max_tokens": cfg.max_tokens,
+            "seed": cfg.seed,
+            "temperature": cfg.temperature,
+            "top_p": cfg.top_p,
+            "presence_penalty": self.cfg.presence_penalty,
         }
-        if self.cfg.think:
-            chat_kwargs["think"] = True
+        if tools:
+            create_kwargs["tools"] = tools
 
-        tool_calls_accumulated: List[TIRToolCallSpec] = []
+        # Tool call delta accumulation: {index: (id, name, arguments_str)}
+        tc_accum: Dict[int, List] = {}  # index -> [id, name, args_str]
         first_chunk = True
-
-        stream = client.chat(**chat_kwargs)
-
         last_printed_think = False
+
+        stream = client.chat.completions.create(**create_kwargs)
 
         for chunk in stream:
             if stop_event is not None and stop_event.is_set():
@@ -195,23 +166,27 @@ class OllamaTIRBackend(TIRBackend):
                 })
                 first_chunk = False
 
-            thinking_text = chunk.message.thinking or ""
-            content_text = chunk.message.content or ""
+            choice = chunk.choices[0] if chunk.choices else None
+            if choice is None:
+                continue
+            delta = choice.delta
 
-            # Tool calls come complete (not streamed token-by-token); accumulate.
-            if chunk.message.tool_calls:
-                for tc in chunk.message.tool_calls:
-                    args = tc.function.arguments
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except Exception:
-                            args = {"code": args}
-                    # Ollama SDK does not expose tool call IDs; generate synthetic ones.
-                    synthetic_id = f"call_{len(tool_calls_accumulated)}"
-                    tool_calls_accumulated.append(
-                        TIRToolCallSpec(id=synthetic_id, name=tc.function.name, arguments=args)
-                    )
+            thinking_text = delta.model_extra.get("reasoning_content") or ""
+            content_text = delta.content or ""
+
+            # Accumulate tool call deltas by index.
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tc_accum:
+                        tc_accum[idx] = ["", "", ""]  # [id, name, args_str]
+                    if tc_delta.id:
+                        tc_accum[idx][0] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            tc_accum[idx][1] = tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tc_accum[idx][2] += tc_delta.function.arguments
 
             if self._verbose:
                 if thinking_text:
@@ -228,17 +203,27 @@ class OllamaTIRBackend(TIRBackend):
             if thinking_text or content_text:
                 yield TIRStreamChunk(thinking=thinking_text, content=content_text)
 
-        # Emit accumulated tool calls (if any) in a final chunk so the caller
-        # can distinguish "turn with tool calls" from "turn with only text".
-        if tool_calls_accumulated:
+        # Build final tool call specs from accumulated deltas.
+        tool_calls_final: List[TIRToolCallSpec] = []
+        for idx in sorted(tc_accum):
+            tc_id, tc_name, tc_args_str = tc_accum[idx]
+            try:
+                args = json.loads(tc_args_str)
+            except Exception:
+                args = {"code": tc_args_str}
+            tool_calls_final.append(
+                TIRToolCallSpec(id=tc_id, name=tc_name, arguments=args)
+            )
+
+        if tool_calls_final:
             if self._verbose:
-                names = [tc.name for tc in tool_calls_accumulated]
+                names = [tc.name for tc in tool_calls_final]
                 print(f"\n[tool_calls: {names}]", flush=True)
-            yield TIRStreamChunk(tool_calls=tool_calls_accumulated)
+            yield TIRStreamChunk(tool_calls=tool_calls_final)
 
         self._log_event("tir_chat_stream_done", {
             "elapsed_ms": int((time.time() - t0) * 1000),
-            "tool_call_count": len(tool_calls_accumulated),
+            "tool_call_count": len(tool_calls_final),
         })
 
         if self._verbose:
@@ -258,4 +243,4 @@ class OllamaTIRBackend(TIRBackend):
             pass
 
 
-__all__ = ["OllamaTIRConfig", "OllamaTIRBackend"]
+__all__ = ["LlamaCppTIRConfig", "LlamaCppTIRBackend"]
