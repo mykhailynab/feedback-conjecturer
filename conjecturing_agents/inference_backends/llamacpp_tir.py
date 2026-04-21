@@ -33,7 +33,7 @@ class LlamaCppTIRConfig:
     # ------------------------------------------------------------------ #
     # Server
     # ------------------------------------------------------------------ #
-    base_url: str = "http://localhost:8080"  # without /v1
+    base_url: str = "http://localhost:8001"  # without /v1
     model: str = ""
     api_key: str = "sk-no-key-required"
     client_timeout: int = 960
@@ -61,11 +61,7 @@ class LlamaCppTIRConfig:
         prefix: str = "llamacpp",
         defaults: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Register CLI args for LlamaCppTIRConfig fields.
-
-        ``tokenizer_path`` is excluded — it is typically wired from the
-        agent-level tokenizer setting.
-        """
+        """Register CLI args for LlamaCppTIRConfig fields."""
         d = defaults or {}
         pre = prefix
         dst = prefix.replace("-", "_")
@@ -103,6 +99,15 @@ class LlamaCppTIRConfig:
             default=d.get("presence_penalty", defs.presence_penalty),
             help="Presence penalty (per-request). Default: %(default)s.",
         )
+        parser.add_argument(
+            f"--{pre}-tokenizer-path",
+            dest=f"{dst}_tokenizer_path",
+            default=d.get("tokenizer_path", defs.tokenizer_path),
+            help=(
+                "Path to the HuggingFace tokenizer directory for the model. "
+                "Required when token counting is required."
+            ),
+        )
 
     @classmethod
     def from_parsed_args(
@@ -119,6 +124,7 @@ class LlamaCppTIRConfig:
             "api_key": getattr(args, f"{dst}_api_key"),
             "client_timeout": getattr(args, f"{dst}_client_timeout"),
             "presence_penalty": getattr(args, f"{dst}_presence_penalty"),
+            "tokenizer_path": getattr(args, f"{dst}_tokenizer_path"),
         }
         kwargs.update(overrides)
         return cls(**kwargs)

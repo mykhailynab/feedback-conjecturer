@@ -141,7 +141,7 @@ class OllamaTIRConfig:
             default=d.get("tokenizer_path", defs.tokenizer_path),
             help=(
                 "Path to the HuggingFace tokenizer directory for the model. "
-                "Required when --limit-prover-tokens is used."
+                "Required when token counting is required."
             ),
         )
 
@@ -151,7 +151,7 @@ class OllamaTIRConfig:
         args: Any,
         prefix: str = "tir",
         **overrides: Any,
-    ) -> "OllamaTIRConfig":
+    ) -> OllamaTIRConfig:
         """Construct from an argparse namespace.
 
         Reads server fields from ``{prefix}_ollama_*`` attrs and model fields

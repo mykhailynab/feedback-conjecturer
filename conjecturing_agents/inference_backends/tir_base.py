@@ -123,7 +123,8 @@ class TIRBackend(ABC):
     (run_session) is provided here and can be used without override.
 
     Implementors:
-      - OllamaTIRBackend  (ollama_tir.py)
+      - `OllamaTIRBackend` (ollama_tir.py)
+      - `LlamaCppTIRBackend` (llamacpp_tir.py)
     """
 
     _verbose: bool = False

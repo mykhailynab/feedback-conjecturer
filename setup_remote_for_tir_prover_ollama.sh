@@ -60,7 +60,7 @@ GGUF_PATH="$MODELS_DIR/$GGUF_FILENAME"
 GGUF_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/$GGUF_FILENAME"
 MATHLIB4_TARBALL="$PROJECT_DIR/mathlib4.tar.gz"
 MATHLIB4_GDRIVE_ID="1_0QVdYxrsaibi-eCqBrdLWnscpUbpLhA"
-OLLAMA_MODEL_NAME="qwen3-6"   # matches --tir-ollama-model default used in printed command
+OLLAMA_MODEL_NAME="qwen3-6"   # matches --tir-ollama-ollama-model default used in printed command
 MODELFILE_PATH="$PROJECT_DIR/Modelfile.qwen3-6"
 ELAN_ENV="/root/.elan/env"
 LOGS_DIR_NAME="conjecture_formalization_logs_20mins"
@@ -265,11 +265,12 @@ PROVER_SCREEN_CMD="screen -dmS prove_formalizations bash -c \
      export PYTHONPATH=. && \
      python conjecturing_agents/prove_formalizations.py \
        --prover-type tir \
-       --tir-ollama-model $OLLAMA_MODEL_NAME \
        --tir-temperature 0.6 \
        --tir-top-p 0.95 \
-       --tir-top-k 20 \
-       --tir-min-p 0.0 \
+       --tir-backend ollama \
+       --tir-ollama-ollama-model $OLLAMA_MODEL_NAME \
+       --tir-ollama-top-k 20 \
+       --tir-ollama-min-p 0.0 \
        --formalizations-path logs/$LOGS_DIR_NAME/formalizations.jsonl \
        --lean-project-dir $MATHLIB4_DIR \
        --parallelism $PARALLELISM \

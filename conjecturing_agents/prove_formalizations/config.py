@@ -8,6 +8,7 @@ from conjecturing_agents.agents.goedel_prover.config import GoedelProverConfig
 from conjecturing_agents.agents.tir_prover.config import TIRProverConfig
 from conjecturing_agents.inference_backends.ollama_raw import OllamaConfig
 from conjecturing_agents.inference_backends.ollama_tir import OllamaTIRConfig
+from conjecturing_agents.inference_backends.llamacpp_tir import LlamaCppTIRConfig
 from conjecturing_agents.inference_backends.vllm_raw import VLLMRawConfig
 from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerConfig
 
@@ -53,7 +54,9 @@ class ProveFormalizationsConfig:
 
     # TIR prover (composed sub-configs)
     tir: TIRProverConfig = field(default_factory=TIRProverConfig)
-    tir_backend: OllamaTIRConfig = field(default_factory=OllamaTIRConfig)
+    tir_backend_type: str = "ollama"  # "ollama" | "llamacpp"
+    tir_ollama: OllamaTIRConfig = field(default_factory=OllamaTIRConfig)
+    tir_llamacpp: LlamaCppTIRConfig = field(default_factory=LlamaCppTIRConfig)
     tir_lean_workspace_subdir: str = ".conjecturing_agents/tir_lean_runs_prove"
 
     # Progressive token budget.
@@ -102,9 +105,17 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
         errs.append(
             "when --enable-parallel-disproof is set, --parallelism must be divisible by 2"
         )
-    if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and not cfg.tir_backend.tokenizer_path:
+    if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and cfg.tir_backend_type == "ollama" and not cfg.tir_ollama.tokenizer_path:
         errs.append(
-            "when --limit-prover-tokens is set with --prover-type=tir, --tir-tokenizer-path must be set"
+            "when --limit-prover-tokens is set with --prover-type=tir, --tir-backend-type=ollama, --tir-ollama-tokenizer-path must be set"
+        )
+    if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and cfg.tir_backend_type == "llamacpp" and not cfg.tir_llamacpp.tokenizer_path:
+        print(f"{cfg.limit_prover_tokens=}")
+        print(f"{cfg.prover_type=}")
+        print(f"{cfg.tir_backend_type=}")
+        print(f"{cfg.tir_llamacpp.tokenizer_path=}")
+        errs.append(
+            "when --limit-prover-tokens is set with --prover-type=tir, --tir-backend-type=llamacpp, --tir-llamacpp-tokenizer-path must be set"
         )
 
     if errs:
@@ -184,9 +195,13 @@ def make_tir_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: str
 
 
 def make_tir_backend(cfg: ProveFormalizationsConfig):
-    """Instantiate the ``OllamaTIRBackend`` for the TIR prover."""
-    from conjecturing_agents.inference_backends.ollama_tir import OllamaTIRBackend
-    return OllamaTIRBackend(cfg.tir_backend)
+    """Instantiate the  backend for the TIR prover."""
+    if cfg.tir_backend_type == "ollama":
+        from conjecturing_agents.inference_backends.ollama_tir import OllamaTIRBackend
+        return OllamaTIRBackend(cfg.tir_ollama)
+    elif cfg.tir_backend_type == "llamacpp":
+        from conjecturing_agents.inference_backends.llamacpp_tir import LlamaCppTIRBackend
+        return LlamaCppTIRBackend(cfg.tir_llamacpp)
 
 
 # ============================================================
@@ -337,7 +352,16 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
 
     # TIR prover agent + backend sub-configs
     TIRProverConfig.add_cli_args(p, "tir")
-    OllamaTIRConfig.add_cli_args(p, "tir")
+    # TIR backend selection
+    p.add_argument(
+        "--tir-backend",
+        dest="tir_backend_type",
+        choices=["ollama", "llamacpp"],
+        default=ProveFormalizationsConfig.tir_backend_type,
+        help="Inference backend for the TIR prover.",
+    )
+    OllamaTIRConfig.add_cli_args(p, "tir-ollama")
+    LlamaCppTIRConfig.add_cli_args(p, "tir-llamacpp")
 
     # TIR lean workspace (separate from main lean workspace)
     p.add_argument(
@@ -355,7 +379,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
             "Stop each prover session when its rendered prompt reaches this many tokens. "
             "0 = unlimited. Use --continue with a higher value to resume sessions that "
             "were cut off, extending the budget progressively (e.g. 4000 → 8000 → 40960). "
-            "For the TIR prover, requires --tir-tokenizer-path."
+            "For the TIR prover, requires --tir-ollama-tokenizer-path / --tir-llamacpp-tokenizer-path"
         ),
     )
     p.add_argument(
@@ -427,7 +451,9 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         goedel_ollama_hosts=args.goedel_ollama_hosts or [],
         goedel_ollama_max_concurrent=args.goedel_ollama_max_concurrent,
         tir=TIRProverConfig.from_parsed_args(args, "tir"),
-        tir_backend=OllamaTIRConfig.from_parsed_args(args, "tir"),
+        tir_backend_type=args.tir_backend_type,
+        tir_ollama=OllamaTIRConfig.from_parsed_args(args, "tir-ollama"),
+        tir_llamacpp=LlamaCppTIRConfig.from_parsed_args(args, "tir-llamacpp"),
         tir_lean_workspace_subdir=args.tir_lean_workspace_subdir,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
