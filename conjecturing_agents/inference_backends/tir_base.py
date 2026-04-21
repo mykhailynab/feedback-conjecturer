@@ -488,6 +488,7 @@ class TIRTokenCounter:
             tools=tools or None,
             tokenize=True,
             add_generation_prompt=True,
+            return_dict=False,
         )
         return len(ids)
 

@@ -110,10 +110,6 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
             "when --limit-prover-tokens is set with --prover-type=tir, --tir-backend-type=ollama, --tir-ollama-tokenizer-path must be set"
         )
     if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and cfg.tir_backend_type == "llamacpp" and not cfg.tir_llamacpp.tokenizer_path:
-        print(f"{cfg.limit_prover_tokens=}")
-        print(f"{cfg.prover_type=}")
-        print(f"{cfg.tir_backend_type=}")
-        print(f"{cfg.tir_llamacpp.tokenizer_path=}")
         errs.append(
             "when --limit-prover-tokens is set with --prover-type=tir, --tir-backend-type=llamacpp, --tir-llamacpp-tokenizer-path must be set"
         )
@@ -195,13 +191,15 @@ def make_tir_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: str
 
 
 def make_tir_backend(cfg: ProveFormalizationsConfig):
-    """Instantiate the  backend for the TIR prover."""
+    """Instantiate the TIR backend (Ollama or llama.cpp)."""
     if cfg.tir_backend_type == "ollama":
         from conjecturing_agents.inference_backends.ollama_tir import OllamaTIRBackend
         return OllamaTIRBackend(cfg.tir_ollama)
     elif cfg.tir_backend_type == "llamacpp":
         from conjecturing_agents.inference_backends.llamacpp_tir import LlamaCppTIRBackend
         return LlamaCppTIRBackend(cfg.tir_llamacpp)
+    else:
+        raise ValueError(f"Unknown tir_backend_type: {cfg.tir_backend_type!r}")
 
 
 # ============================================================
@@ -294,8 +292,8 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         default=ProveFormalizationsConfig.prover_type,
         help=(
             "Which prover to use. 'goedel' uses GoedelProverAgent with a RawBackend "
-            "(vLLM or Ollama raw completion). 'tir' uses TIRProverAgent with OllamaTIRBackend "
-            "(Ollama chat API with native Python + Lean tool calls)."
+            "(vLLM or Ollama raw completion). 'tir' uses TIRProverAgent with a TIR backend "
+            "(Ollama or llama.cpp; selected via --tir-backend)."
         ),
     )
 
