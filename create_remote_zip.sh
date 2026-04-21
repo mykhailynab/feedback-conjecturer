@@ -64,8 +64,9 @@ zip conjecturing_agents_plus_references.zip \
 # Individual root-level files
 zip "$OUTPUT" \
     requirements.txt \
-    setup_remote.sh \
-    setup_remote_for_tir_prover.sh
+    setup_remote_for_goedel.sh \
+    setup_remote_for_tir_prover_llamacpp.sh \
+    setup_remote_for_tir_prover_ollama.sh
 
 SIZE=$(du -sh "$OUTPUT" | cut -f1)
 COUNT=$(unzip -l "$OUTPUT" | tail -1 | awk '{print $2}')
