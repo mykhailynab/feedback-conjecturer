@@ -5,6 +5,84 @@ Run from `/workspace` with Ollama already serving the model.
 
 ---
 
+### New commands (actually ran, uncategorized)
+
+only the correctly formalized:
+```sh
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/stripped_formalizations_goedel_pass/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 4 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp.log'
+```
+pass@1:
+```sh
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/stripped_formalizations_goedel_pass_1/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 1 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp.log'
+```
+
+whole dataset:
+```sh
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp.log'
+```
+
+
+---
+
 ## Goedel Prover V2 (Ollama backend)
 
 ```sh

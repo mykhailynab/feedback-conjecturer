@@ -13,13 +13,16 @@ set -euo pipefail
 # Argument parsing
 # ============================================================
 
-PARALLELISM=1
+PARALLELISM=0  # 0 = auto (NUM_GPUS * NP_PER_SERVER)
+NP_PER_SERVER=1
 START_PROVER=false
 
 usage() {
-    echo "Usage: $0 [-p <parallelism>] [--start-prover]"
-    echo "  -p / --parallelism   Number of parallel slots (-np for llama-server"
-    echo "                       and --parallelism for prove_formalizations). Default: 1."
+    echo "Usage: $0 [-p <parallelism>] [--np <slots>] [--start-prover]"
+    echo "  -p / --parallelism   Number of parallel workers for prove_formalizations."
+    echo "                       Default: NUM_GPUS * NP_PER_SERVER."
+    echo "  --np                 Number of parallel slots per llama-server (-np flag)."
+    echo "                       Also sets --tir-llamacpp-max-concurrent. Default: 1."
     echo "  --start-prover       After setup, launch prove_formalizations in a screen session."
     echo "  -h / --help          Show this message."
     exit 1
@@ -28,6 +31,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -p|--parallelism)   PARALLELISM="$2"; shift 2 ;;
+        --np)               NP_PER_SERVER="$2"; shift 2 ;;
         --start-prover)     START_PROVER=true; shift ;;
         -h|--help)          usage ;;
         *)                  usage ;;
@@ -66,9 +70,9 @@ ELAN_ENV="/root/.elan/env"
 LOGS_DIR_NAME="conjecture_formalization_logs_20mins"
 LLAMACPP_PORT=8001
 
-# Max context per slot = 262144.  Total --ctx-size = per-slot * parallelism.
+# Max context per slot = 262144.  Each llama-server gets ctx_size = per-slot * np.
 CTX_PER_SLOT=262144
-CTX_SIZE=$(( CTX_PER_SLOT * PARALLELISM ))
+CTX_SIZE_PER_SERVER=$(( CTX_PER_SLOT * NP_PER_SERVER ))
 
 # Sampling defaults (set at server startup — not per-request for top_k/min_p/repeat_penalty)
 TEMPERATURE=0.6
@@ -141,7 +145,16 @@ _fmtsize() {
     fi
 }
 
-_filesize() { [[ -f "$1" ]] && stat -c%s "$1" 2>/dev/null || echo 0; }
+# Size of a single file, or total size of all files in a directory tree.
+_filesize() {
+    if [[ -f "$1" ]]; then
+        stat -c%s "$1" 2>/dev/null || echo 0
+    elif [[ -d "$1" ]]; then
+        du -sb "$1" 2>/dev/null | cut -f1 || echo 0
+    else
+        echo 0
+    fi
+}
 
 download_model &
 GGUF_PID=$!
@@ -155,7 +168,7 @@ while kill -0 "$GGUF_PID" 2>/dev/null || kill -0 "$MATHLIB4_PID" 2>/dev/null; do
     kill -0 "$GGUF_PID"     2>/dev/null || GGUF_STATUS="done"
     kill -0 "$MATHLIB4_PID" 2>/dev/null || MATHLIB4_STATUS="done"
 
-    GGUF_SIZE="$(_fmtsize "$(_filesize "$GGUF_PATH")")"
+    GGUF_SIZE="$(_fmtsize "$(_filesize "$MODEL_DIR")")"
     MATHLIB4_SIZE="$(_fmtsize "$(_filesize "$MATHLIB4_TARBALL")")"
 
     printf "\r  model: %-8s %-10s   mathlib4: %-8s %-10s" \
@@ -245,17 +258,32 @@ fi
     || die "llama-server not found after build. Check build logs."
 
 # ============================================================
-# 6. Start llama-server
+# 6. Detect GPUs and start one llama-server per GPU
 # ============================================================
 
-step "Starting llama-server (port $LLAMACPP_PORT, -np $PARALLELISM, ctx_size $CTX_SIZE)"
+NUM_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)
+[[ "$NUM_GPUS" -ge 1 ]] || die "No GPUs detected by nvidia-smi"
 
-if curl -sf "http://localhost:$LLAMACPP_PORT/health" &>/dev/null; then
-    echo "llama-server already running on port $LLAMACPP_PORT"
-else
-    echo "Launching llama-server in screen session 'llama-server'..."
-    screen -dmS llama-server bash -c \
-        "\"$LLAMA_SERVER\" \
+# Auto-compute parallelism if not explicitly set
+if [[ "$PARALLELISM" -eq 0 ]]; then
+    PARALLELISM=$(( NUM_GPUS * NP_PER_SERVER ))
+fi
+
+step "Detected $NUM_GPUS GPU(s), np=$NP_PER_SERVER per server — launching one llama-server per GPU (base port $LLAMACPP_PORT)"
+
+for GPU_IDX in $(seq 0 $(( NUM_GPUS - 1 ))); do
+    PORT=$(( LLAMACPP_PORT + GPU_IDX ))
+    SESSION_NAME="llama-server-${GPU_IDX}"
+    LOG_FILE="/var/log/llama-server-${GPU_IDX}.log"
+
+    if curl -sf "http://localhost:$PORT/health" &>/dev/null; then
+        echo "  GPU $GPU_IDX: llama-server already running on port $PORT"
+        continue
+    fi
+
+    echo "  GPU $GPU_IDX: launching on port $PORT (screen: $SESSION_NAME)"
+    screen -dmS "$SESSION_NAME" bash -c \
+        "CUDA_VISIBLE_DEVICES=$GPU_IDX \"$LLAMA_SERVER\" \
         --model \"$GGUF_PATH\" \
         --mmproj \"$MMPROJ_PATH\" \
         --alias \"$MODEL_ALIAS\" \
@@ -263,31 +291,45 @@ else
         --top-p $TOP_P \
         --min-p $MIN_P \
         --top-k $TOP_K \
-        --ctx-size $CTX_SIZE \
-        --port $LLAMACPP_PORT \
-        -np $PARALLELISM \
-        2>&1 | tee /var/log/llama-server.log"
-    echo "Waiting for llama-server to become ready..."
+        --ctx-size $CTX_SIZE_PER_SERVER \
+        --port $PORT \
+        -np $NP_PER_SERVER \
+        2>&1 | tee $LOG_FILE"
+done
+
+# Wait for all servers to become ready
+step "Waiting for all llama-servers to become ready..."
+for GPU_IDX in $(seq 0 $(( NUM_GPUS - 1 ))); do
+    PORT=$(( LLAMACPP_PORT + GPU_IDX ))
+    SESSION_NAME="llama-server-${GPU_IDX}"
+    LOG_FILE="/var/log/llama-server-${GPU_IDX}.log"
+
     for i in $(seq 1 120); do
-        if curl -sf "http://localhost:$LLAMACPP_PORT/health" &>/dev/null; then
-            echo "llama-server is ready"
+        if curl -sf "http://localhost:$PORT/health" &>/dev/null; then
+            echo "  GPU $GPU_IDX (port $PORT): ready"
             break
         fi
-        if ! screen -list | grep -q "llama-server"; then
-            die "llama-server screen session exited unexpectedly (check /var/log/llama-server.log)"
+        if ! screen -list | grep -q "$SESSION_NAME"; then
+            die "llama-server on GPU $GPU_IDX exited unexpectedly (check $LOG_FILE)"
         fi
         if [[ $i -eq 120 ]]; then
-            die "llama-server did not become ready after 120 s (check /var/log/llama-server.log)"
+            die "llama-server on GPU $GPU_IDX did not become ready after 120 s (check $LOG_FILE)"
         fi
         sleep 1
     done
-fi
+done
 
 # ============================================================
 # 7. Print (and optionally launch) the run command
 # ============================================================
 
 step "Setup complete"
+
+# --------------- Build base-urls list ---------------
+BASE_URLS=""
+for GPU_IDX in $(seq 0 $(( NUM_GPUS - 1 ))); do
+    BASE_URLS="$BASE_URLS http://localhost:$(( LLAMACPP_PORT + GPU_IDX ))"
+done
 
 # --------------- TIR prover command ---------------
 PROVER_SCREEN_CMD="screen -dmS prove_formalizations bash -c \
@@ -300,7 +342,8 @@ PROVER_SCREEN_CMD="screen -dmS prove_formalizations bash -c \
        --tir-top-p $TOP_P \
        --tir-backend llamacpp \
        --tir-llamacpp-model $MODEL_ALIAS \
-       --tir-llamacpp-base-url http://localhost:$LLAMACPP_PORT \
+       --tir-llamacpp-base-urls $BASE_URLS \
+       --tir-llamacpp-max-concurrent $NP_PER_SERVER \
        --tir-llamacpp-client-timeout 960 \
        --tir-llamacpp-presence-penalty 0.0 \
        --tir-llamacpp-tokenizer-path $TOKENIZER_PATH \
@@ -311,6 +354,8 @@ PROVER_SCREEN_CMD="screen -dmS prove_formalizations bash -c \
        --continue &> prove_formalizations_tir_llamacpp.log'"
 
 echo ""
+echo "Servers: $NUM_GPUS llama-server instances (ports $LLAMACPP_PORT–$(( LLAMACPP_PORT + NUM_GPUS - 1 )))"
+echo ""
 echo "TIR prover command (opens a detached screen session):"
 echo "  $PROVER_SCREEN_CMD"
 echo ""
@@ -318,7 +363,9 @@ echo "For log monitoring:"
 echo "  screen -dmS monitor_prove tail -f prove_formalizations_tir_llamacpp.log"
 echo ""
 echo "For llama-server monitoring:"
-echo "  screen -dmS llama_mon tail -f /var/log/llama-server.log"
+for GPU_IDX in $(seq 0 $(( NUM_GPUS - 1 ))); do
+    echo "  screen -dmS llama_mon_$GPU_IDX tail -f /var/log/llama-server-${GPU_IDX}.log"
+done
 echo ""
 echo "For GPU monitoring:"
 echo "  screen -S gpu -dm watch -n 1 nvidia-smi"

@@ -58,6 +58,9 @@ class ProveFormalizationsConfig:
     tir_ollama: OllamaTIRConfig = field(default_factory=OllamaTIRConfig)
     tir_llamacpp: LlamaCppTIRConfig = field(default_factory=LlamaCppTIRConfig)
     tir_lean_workspace_subdir: str = ".conjecturing_agents/tir_lean_runs_prove"
+    # Multiple llama.cpp server URLs for load-balanced multi-GPU setups.
+    tir_llamacpp_base_urls: List[str] = field(default_factory=list)
+    tir_llamacpp_max_concurrent: int = 1
 
     # Progressive token budget.
     limit_prover_tokens: int = 0
@@ -191,12 +194,31 @@ def make_tir_prover_config(cfg: ProveFormalizationsConfig, workspace_suffix: str
 
 
 def make_tir_backend(cfg: ProveFormalizationsConfig):
-    """Instantiate the TIR backend (Ollama or llama.cpp)."""
+    """Instantiate the TIR backend (Ollama or llama.cpp).
+
+    When ``tir_llamacpp_base_urls`` is non-empty (llamacpp backend only),
+    returns a ``LoadBalancedTIRBackend`` that distributes sessions across all
+    listed servers with at most ``tir_llamacpp_max_concurrent`` concurrent
+    sessions per server.
+    """
     if cfg.tir_backend_type == "ollama":
         from conjecturing_agents.inference_backends.ollama_tir import OllamaTIRBackend
         return OllamaTIRBackend(cfg.tir_ollama)
     elif cfg.tir_backend_type == "llamacpp":
         from conjecturing_agents.inference_backends.llamacpp_tir import LlamaCppTIRBackend
+
+        if cfg.tir_llamacpp_base_urls:
+            from conjecturing_agents.inference_backends.load_balanced_backend_tir import (
+                LoadBalancedTIRBackend,
+            )
+            sub_backends = [
+                LlamaCppTIRBackend(replace(cfg.tir_llamacpp, base_url=url))
+                for url in cfg.tir_llamacpp_base_urls
+            ]
+            return LoadBalancedTIRBackend(
+                [(b, cfg.tir_llamacpp_max_concurrent) for b in sub_backends]
+            )
+
         return LlamaCppTIRBackend(cfg.tir_llamacpp)
     else:
         raise ValueError(f"Unknown tir_backend_type: {cfg.tir_backend_type!r}")
@@ -361,6 +383,30 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
     OllamaTIRConfig.add_cli_args(p, "tir-ollama")
     LlamaCppTIRConfig.add_cli_args(p, "tir-llamacpp")
 
+    # Load-balanced llama.cpp (script-level)
+    p.add_argument(
+        "--tir-llamacpp-base-urls",
+        nargs="+",
+        default=[],
+        metavar="URL",
+        help=(
+            "Multiple llama.cpp server URLs for load-balanced multi-GPU inference "
+            "(backend=llamacpp). Sessions are distributed across all servers with at "
+            "most --tir-llamacpp-max-concurrent sessions per server. "
+            "Example: --tir-llamacpp-base-urls http://localhost:8001 http://localhost:8002"
+        ),
+    )
+    p.add_argument(
+        "--tir-llamacpp-max-concurrent",
+        type=int,
+        default=ProveFormalizationsConfig.tir_llamacpp_max_concurrent,
+        help=(
+            "Maximum concurrent sessions per llama.cpp server when using "
+            "--tir-llamacpp-base-urls. Should match -np on each llama-server. "
+            "Default: %(default)s."
+        ),
+    )
+
     # TIR lean workspace (separate from main lean workspace)
     p.add_argument(
         "--tir-lean-workspace-subdir",
@@ -453,6 +499,8 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         tir_ollama=OllamaTIRConfig.from_parsed_args(args, "tir-ollama"),
         tir_llamacpp=LlamaCppTIRConfig.from_parsed_args(args, "tir-llamacpp"),
         tir_lean_workspace_subdir=args.tir_lean_workspace_subdir,
+        tir_llamacpp_base_urls=args.tir_llamacpp_base_urls or [],
+        tir_llamacpp_max_concurrent=args.tir_llamacpp_max_concurrent,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

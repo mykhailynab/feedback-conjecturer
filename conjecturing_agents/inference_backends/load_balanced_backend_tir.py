@@ -19,7 +19,13 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from .tir_base import TIRBackend, TIRGenerationConfig, TIRStreamChunk
+from .tir_base import (
+    TIRBackend,
+    TIRGenerationConfig,
+    TIRSessionResult,
+    TIRStreamChunk,
+    TIRToolHandler,
+)
 
 
 class LoadBalancedTIRBackend(TIRBackend):
@@ -91,6 +97,28 @@ class LoadBalancedTIRBackend(TIRBackend):
         try:
             yield from self._backends[idx].chat_streaming(
                 messages, tools, cfg, stop_event
+            )
+        finally:
+            self._release(idx)
+
+    def run_session(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_handlers: Dict[str, TIRToolHandler],
+        cfg: TIRGenerationConfig,
+        stop_event: Optional[threading.Event] = None,
+    ) -> TIRSessionResult:
+        """Acquire a slot for the entire multi-turn session.
+
+        All turns within a session must go to the same server (no shared
+        state across llama.cpp instances), so we hold the slot for the
+        full duration rather than acquiring per-turn in chat_streaming().
+        """
+        idx = self._acquire()
+        try:
+            return self._backends[idx].run_session(
+                messages, tools, tool_handlers, cfg, stop_event
             )
         finally:
             self._release(idx)
