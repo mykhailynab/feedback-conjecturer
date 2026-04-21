@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -57,7 +60,7 @@ class LeanCompilerConfig:
     auto_extract_code_block: bool = True
     cleanup_source_file: bool = False
 
-    # Memory limit for the lake/lean subprocess (bytes); 0 = no limit
+    # Memory limit for the lake/lean subprocess (megabytes); 0 = no limit
     max_memory_megabytes: int = 4 * 1024  # 4 GiB
 
     # Optional prefix added to temp files
@@ -70,7 +73,90 @@ class LeanCompilerConfig:
     include_non_json_stdout_lines: bool = True
 
 
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_cli_args(
+        cls,
+        parser: ArgumentParser,
+        prefix: str = "lean",
+        defaults: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register CLI args for the user-facing LeanCompilerConfig fields.
+
+        Only exposes the five fields that scripts typically surface as flags:
+        project_dir, workspace_subdir, timeout_seconds, lean_jobs,
+        max_memory_megabytes.  Policy/wiring fields are left at dataclass
+        defaults and overridden in factory helpers.
+        """
+        d = defaults or {}
+        pre = prefix  # e.g. "lean"
+        dst = prefix.replace("-", "_")  # e.g. "lean"
+
+        parser.add_argument(
+            f"--{pre}-project-dir",
+            dest=f"{dst}_project_dir",
+            default=d.get("project_dir", "."),
+            help="Path to a Lean project with Mathlib configured.",
+        )
+        parser.add_argument(
+            f"--{pre}-workspace-subdir",
+            dest=f"{dst}_workspace_subdir",
+            default=d.get("workspace_subdir", cls.workspace_subdir),
+            help="Subdirectory inside lean_project_dir where temporary .lean files are written.",
+        )
+        parser.add_argument(
+            f"--{pre}-timeout-seconds",
+            dest=f"{dst}_timeout_seconds",
+            type=int,
+            default=d.get("timeout_seconds", cls.timeout_seconds),
+            help="Per-file Lean compilation timeout in seconds.",
+        )
+        parser.add_argument(
+            f"--{pre}-jobs",
+            dest=f"{dst}_jobs",
+            type=int,
+            default=d.get("lean_jobs", cls.lean_jobs),
+            help="Number of parallel jobs passed to lake env lean -j.",
+        )
+        parser.add_argument(
+            f"--{pre}-max-memory-megabytes",
+            dest=f"{dst}_max_memory_megabytes",
+            type=int,
+            default=d.get("max_memory_megabytes", cls.max_memory_megabytes),
+            help=(
+                "Maximum virtual memory (megabytes) for each lake/lean subprocess. "
+                "0 means no limit."
+            ),
+        )
+
+    @classmethod
+    def from_parsed_args(
+        cls,
+        args: Any,
+        prefix: str = "lean",
+        **overrides: Any,
+    ) -> "LeanCompilerConfig":
+        """Construct a LeanCompilerConfig from an argparse namespace.
+
+        Fields not registered by ``add_cli_args`` stay at dataclass defaults
+        unless provided via ``overrides``.
+        """
+        dst = prefix.replace("-", "_")
+        kwargs: Dict[str, Any] = {
+            "project_dir": getattr(args, f"{dst}_project_dir"),
+            "workspace_subdir": getattr(args, f"{dst}_workspace_subdir"),
+            "timeout_seconds": getattr(args, f"{dst}_timeout_seconds"),
+            "lean_jobs": getattr(args, f"{dst}_jobs"),
+            "max_memory_megabytes": getattr(args, f"{dst}_max_memory_megabytes"),
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
+
+
 __all__ = [
     "LeanCompileResult",
-    "LeanCompilerConfig" 
+    "LeanCompilerConfig"
 ]

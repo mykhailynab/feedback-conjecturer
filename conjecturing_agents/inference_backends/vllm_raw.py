@@ -14,9 +14,10 @@ import sys
 import time
 import subprocess
 import threading
+from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 from openai import OpenAI
 
@@ -60,6 +61,225 @@ class VLLMRawConfig:
     stream_interval: int = 200
     enable_prefix_caching: bool = True
     extra_server_args: List[str] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_cli_args(
+        cls,
+        parser: ArgumentParser,
+        prefix: str = "vllm",
+        defaults: Optional[Dict[str, Any]] = None,
+        exclude: Optional[Set[str]] = None,
+    ) -> None:
+        """Register CLI args for VLLMRawConfig fields.
+
+        ``exclude`` omits fields that are wired from elsewhere (e.g.
+        ``tokenizer_path`` and ``context_tokens`` when used with the Goedel
+        prover — those come from GoedelProverConfig).
+        """
+        d = defaults or {}
+        ex = exclude or set()
+        pre = prefix
+        dst = prefix.replace("-", "_")
+        defs = cls()
+
+        if "base_url" not in ex:
+            parser.add_argument(
+                f"--{pre}-base-url",
+                dest=f"{dst}_base_url",
+                default=d.get("base_url", defs.base_url),
+                help="vLLM OpenAI-compatible base URL.",
+            )
+        if "served_model_name" not in ex:
+            parser.add_argument(
+                f"--{pre}-model-name",
+                dest=f"{dst}_model_name",
+                default=d.get("served_model_name", defs.served_model_name),
+                help="Served model name for the vLLM endpoint.",
+            )
+        if "api_key" not in ex:
+            parser.add_argument(
+                f"--{pre}-api-key",
+                dest=f"{dst}_api_key",
+                default=d.get("api_key", defs.api_key),
+                help="API key for the vLLM endpoint.",
+            )
+        if "client_timeout" not in ex:
+            parser.add_argument(
+                f"--{pre}-client-timeout",
+                dest=f"{dst}_client_timeout",
+                type=int,
+                default=d.get("client_timeout", defs.client_timeout),
+                help="HTTP client timeout in seconds for vLLM requests.",
+            )
+        if "manage_server" not in ex:
+            parser.add_argument(
+                f"--{pre}-manage-server",
+                dest=f"{dst}_manage_server",
+                action="store_true",
+                default=d.get("manage_server", defs.manage_server),
+                help="Start and manage a vLLM server subprocess.",
+            )
+        if "model_path" not in ex:
+            parser.add_argument(
+                f"--{pre}-model-path",
+                dest=f"{dst}_model_path",
+                default=d.get("model_path", defs.model_path),
+                help="Path to model weights (required when manage-server is set).",
+            )
+        if "port" not in ex:
+            parser.add_argument(
+                f"--{pre}-port",
+                dest=f"{dst}_port",
+                type=int,
+                default=d.get("port", defs.port),
+                help="Port for the managed vLLM server.",
+            )
+        if "host" not in ex:
+            parser.add_argument(
+                f"--{pre}-host",
+                dest=f"{dst}_host",
+                default=d.get("host", defs.host),
+                help="Host for the managed vLLM server.",
+            )
+        if "server_timeout" not in ex:
+            parser.add_argument(
+                f"--{pre}-server-timeout",
+                dest=f"{dst}_server_timeout",
+                type=int,
+                default=d.get("server_timeout", defs.server_timeout),
+                help="Seconds to wait for the vLLM server to become ready.",
+            )
+        if "server_log_path" not in ex:
+            parser.add_argument(
+                f"--{pre}-server-log-path",
+                dest=f"{dst}_server_log_path",
+                default=d.get("server_log_path", defs.server_log_path),
+                help="File path for vLLM server stdout/stderr logs.",
+            )
+        if "dtype" not in ex:
+            parser.add_argument(
+                f"--{pre}-dtype",
+                dest=f"{dst}_dtype",
+                default=d.get("dtype", defs.dtype),
+                help="Model weight dtype passed to vLLM.",
+            )
+        if "kv_cache_dtype" not in ex:
+            parser.add_argument(
+                f"--{pre}-kv-cache-dtype",
+                dest=f"{dst}_kv_cache_dtype",
+                default=d.get("kv_cache_dtype", defs.kv_cache_dtype),
+                help="KV-cache dtype passed to vLLM.",
+            )
+        if "context_tokens" not in ex:
+            parser.add_argument(
+                f"--{pre}-context-tokens",
+                dest=f"{dst}_context_tokens",
+                type=int,
+                default=d.get("context_tokens", defs.context_tokens),
+                help="Max model context length for vLLM server.",
+            )
+        if "gpu_memory_utilization" not in ex:
+            parser.add_argument(
+                f"--{pre}-gpu-memory-utilization",
+                dest=f"{dst}_gpu_memory_utilization",
+                type=float,
+                default=d.get("gpu_memory_utilization", defs.gpu_memory_utilization),
+                help="GPU memory utilization fraction for vLLM.",
+            )
+        if "max_num_seqs" not in ex:
+            parser.add_argument(
+                f"--{pre}-max-num-seqs",
+                dest=f"{dst}_max_num_seqs",
+                type=int,
+                default=d.get("max_num_seqs", defs.max_num_seqs),
+                help="Maximum number of concurrent sequences for vLLM.",
+            )
+        if "stream_interval" not in ex:
+            parser.add_argument(
+                f"--{pre}-stream-interval",
+                dest=f"{dst}_stream_interval",
+                type=int,
+                default=d.get("stream_interval", defs.stream_interval),
+                help="Token streaming interval for vLLM.",
+            )
+        if "enable_prefix_caching" not in ex:
+            parser.add_argument(
+                f"--{pre}-no-prefix-caching",
+                dest=f"{dst}_enable_prefix_caching",
+                action="store_false",
+                default=d.get("enable_prefix_caching", defs.enable_prefix_caching),
+                help="Disable prefix caching in vLLM.",
+            )
+        if "extra_server_args" not in ex:
+            parser.add_argument(
+                f"--{pre}-extra-server-args",
+                dest=f"{dst}_extra_server_args",
+                nargs="*",
+                default=d.get("extra_server_args", []),
+                help="Extra CLI arguments forwarded verbatim to the vLLM server.",
+            )
+
+    @classmethod
+    def from_parsed_args(
+        cls,
+        args: Any,
+        prefix: str = "vllm",
+        exclude: Optional[Set[str]] = None,
+        **overrides: Any,
+    ) -> "VLLMRawConfig":
+        """Construct from an argparse namespace.
+
+        Fields in ``exclude`` or ``overrides`` are handled accordingly;
+        everything else is read from the namespace using the prefix.
+        """
+        ex = exclude or set()
+        dst = prefix.replace("-", "_")
+        defs = cls()
+
+        field_map = {
+            "base_url": f"{dst}_base_url",
+            "served_model_name": f"{dst}_model_name",
+            "api_key": f"{dst}_api_key",
+            "client_timeout": f"{dst}_client_timeout",
+            "manage_server": f"{dst}_manage_server",
+            "model_path": f"{dst}_model_path",
+            "port": f"{dst}_port",
+            "host": f"{dst}_host",
+            "server_timeout": f"{dst}_server_timeout",
+            "server_log_path": f"{dst}_server_log_path",
+            "dtype": f"{dst}_dtype",
+            "kv_cache_dtype": f"{dst}_kv_cache_dtype",
+            "context_tokens": f"{dst}_context_tokens",
+            "gpu_memory_utilization": f"{dst}_gpu_memory_utilization",
+            "max_num_seqs": f"{dst}_max_num_seqs",
+            "stream_interval": f"{dst}_stream_interval",
+            "enable_prefix_caching": f"{dst}_enable_prefix_caching",
+            "extra_server_args": f"{dst}_extra_server_args",
+        }
+
+        kwargs: Dict[str, Any] = {}
+        for field_name, attr_name in field_map.items():
+            if field_name in overrides:
+                kwargs[field_name] = overrides[field_name]
+            elif field_name in ex:
+                kwargs[field_name] = getattr(defs, field_name)
+            else:
+                val = getattr(args, attr_name, None)
+                if val is not None:
+                    kwargs[field_name] = val
+                else:
+                    kwargs[field_name] = getattr(defs, field_name)
+
+        # Apply remaining overrides not in field_map
+        for k, v in overrides.items():
+            if k not in field_map:
+                kwargs[k] = v
+
+        return cls(**kwargs)
 
 
 class VLLMRawBackend(RawBackend):

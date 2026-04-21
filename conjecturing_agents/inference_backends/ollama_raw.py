@@ -14,7 +14,8 @@ from __future__ import annotations
 import time
 import ollama
 import threading
-from typing import Iterator, Optional
+from argparse import ArgumentParser
+from typing import Any, Dict, Iterator, Optional
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 
@@ -35,6 +36,67 @@ class OllamaConfig:
     # Required for context-budget enforcement before generation.
     # ------------------------------------------------------------------ #
     tokenizer_path: str = ""
+
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_cli_args(
+        cls,
+        parser: ArgumentParser,
+        prefix: str = "ollama",
+        defaults: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register CLI args for OllamaConfig fields.
+
+        ``tokenizer_path`` is excluded — it is typically wired from the agent
+        config (e.g. GoedelProverConfig.tokenizer_path) in factory helpers.
+        """
+        d = defaults or {}
+        pre = prefix
+        dst = prefix.replace("-", "_")
+        defs = cls()
+
+        parser.add_argument(
+            f"--{pre}-model",
+            dest=f"{dst}_model",
+            default=d.get("model", defs.model),
+            help="Ollama model name.",
+        )
+        parser.add_argument(
+            f"--{pre}-host",
+            dest=f"{dst}_host",
+            default=d.get("host", defs.host),
+            help="Ollama server URL.",
+        )
+        parser.add_argument(
+            f"--{pre}-client-timeout",
+            dest=f"{dst}_client_timeout",
+            type=int,
+            default=d.get("client_timeout", defs.client_timeout),
+            help="HTTP client timeout in seconds for Ollama requests.",
+        )
+
+    @classmethod
+    def from_parsed_args(
+        cls,
+        args: Any,
+        prefix: str = "ollama",
+        **overrides: Any,
+    ) -> "OllamaConfig":
+        """Construct from an argparse namespace.
+
+        ``tokenizer_path`` defaults to "" unless provided via ``overrides``.
+        """
+        dst = prefix.replace("-", "_")
+        kwargs: Dict[str, Any] = {
+            "model": getattr(args, f"{dst}_model"),
+            "host": getattr(args, f"{dst}_host"),
+            "client_timeout": getattr(args, f"{dst}_client_timeout"),
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
 
 
 class OllamaBackend(RawBackend):

@@ -4,7 +4,11 @@ from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from typing import List
 
+from conjecturing_agents.agents.goedel_prover.config import GoedelProverConfig
 from conjecturing_agents.answer_checking.checker import AnswerCheckerConfig
+from conjecturing_agents.inference_backends.ollama_raw import OllamaConfig
+from conjecturing_agents.inference_backends.vllm_raw import VLLMRawConfig
+from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerConfig
 
 
 # ============================================================
@@ -17,12 +21,13 @@ class CheckFormalizationsConfig:
     formalizations_path: str = "logs/conjecture_formalization_logs/formalizations.jsonl"
     output_path: str = ""  # defaults to <formalizations_path parent>/check_results.jsonl
 
-    # Lean compiler
-    lean_project_dir: str = "."
-    lean_workspace_subdir: str = ".conjecturing_agents/answer_checking"
-    lean_timeout_seconds: int = 120
-    lean_jobs: int = 4
-    lean_max_memory_megabytes: int = 4 * 1024  # 0 = no limit
+    # Lean compiler (shared base settings)
+    lean: LeanCompilerConfig = field(
+        default_factory=lambda: LeanCompilerConfig(
+            project_dir=".",
+            workspace_subdir=".conjecturing_agents/answer_checking",
+        )
+    )
 
     # Heuristics
     use_string_match: bool = True
@@ -32,43 +37,15 @@ class CheckFormalizationsConfig:
     goedel_proof_retries: int = 1
     goedel_disproof_retries: int = 1
 
-    # Goedel prover settings
-    goedel_max_rounds: int = 2
-    goedel_max_tokens: int = 16384
-    goedel_temperature: float = 0.6
-    goedel_top_p: float = 0.95
-    goedel_repeat_penalty: float = 1.0
-    goedel_context_tokens: int = 40960
-    goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
+    # Goedel prover (composed sub-configs)
+    goedel: GoedelProverConfig = field(default_factory=GoedelProverConfig)
     goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
-    goedel_ollama_model: str = "goedel-v2:latest"
-    goedel_ollama_host: str = "http://localhost:11434"
+    goedel_ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    goedel_vllm: VLLMRawConfig = field(default_factory=VLLMRawConfig)
+    goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
     # Multiple Ollama hosts for load-balanced multi-GPU setups.
-    # When non-empty, overrides goedel_ollama_host and distributes requests
-    # across all listed hosts with at most goedel_ollama_max_concurrent
-    # concurrent requests per host.
     goedel_ollama_hosts: List[str] = field(default_factory=list)
     goedel_ollama_max_concurrent: int = 6
-    goedel_ollama_client_timeout: int = 1200
-    goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
-    goedel_vllm_model_name: str = "goedel"
-    goedel_vllm_api_key: str = "sk-local"
-    goedel_vllm_client_timeout: int = 1200
-    goedel_vllm_manage_server: bool = False
-    goedel_vllm_model_path: str = ""
-    goedel_vllm_port: int = 8001
-    goedel_vllm_host: str = "0.0.0.0"
-    goedel_vllm_server_timeout: int = 1200
-    goedel_vllm_server_log_path: str = "vllm_goedel_server.log"
-    goedel_vllm_dtype: str = "bfloat16"
-    goedel_vllm_kv_cache_dtype: str = "fp8_e4m3"
-    goedel_vllm_gpu_memory_utilization: float = 0.96
-    goedel_vllm_max_num_seqs: int = 32
-    goedel_vllm_stream_interval: int = 200
-    goedel_vllm_enable_prefix_caching: bool = True
-    goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
-    goedel_tokenizer_path: str = "tokenizers/goedel_prover_hf_tokenizer"  # HF tokenizer for token counting
-    goedel_max_error_message_chars: int = 0
 
     # Logging / debug
     print_agent_conv: bool = False
@@ -91,11 +68,11 @@ def validate_cfg(cfg: CheckFormalizationsConfig) -> None:
 
     if not cfg.formalizations_path:
         errs.append("formalizations_path must be non-empty")
-    if not cfg.lean_project_dir:
+    if not cfg.lean.project_dir:
         errs.append("lean_project_dir must be non-empty")
-    if cfg.lean_timeout_seconds <= 0:
+    if cfg.lean.timeout_seconds <= 0:
         errs.append("lean_timeout_seconds must be >= 1")
-    if cfg.lean_jobs <= 0:
+    if cfg.lean.lean_jobs <= 0:
         errs.append("lean_jobs must be >= 1")
     if cfg.parallelism <= 0:
         errs.append("parallelism must be >= 1")
@@ -112,47 +89,18 @@ def validate_cfg(cfg: CheckFormalizationsConfig) -> None:
 
 def make_checker_config(cfg: CheckFormalizationsConfig) -> AnswerCheckerConfig:
     return AnswerCheckerConfig(
-        lean_project_dir=cfg.lean_project_dir,
-        lean_workspace_subdir=cfg.lean_workspace_subdir,
-        lean_timeout_seconds=cfg.lean_timeout_seconds,
-        lean_jobs=cfg.lean_jobs,
-        lean_max_memory_megabytes=cfg.lean_max_memory_megabytes,
+        lean=cfg.lean,
         use_string_match=cfg.use_string_match,
         use_lean_equiv=cfg.use_lean_equiv,
         use_goedel_prover=cfg.use_goedel_prover,
         use_goedel_disprover=cfg.use_goedel_disprover,
         goedel_proof_retries=cfg.goedel_proof_retries,
         goedel_disproof_retries=cfg.goedel_disproof_retries,
-        goedel_max_rounds=cfg.goedel_max_rounds,
-        goedel_max_tokens=cfg.goedel_max_tokens,
-        goedel_temperature=cfg.goedel_temperature,
-        goedel_top_p=cfg.goedel_top_p,
-        goedel_repeat_penalty=cfg.goedel_repeat_penalty,
-        goedel_context_tokens=cfg.goedel_context_tokens,
-        goedel_lean_workspace_subdir=cfg.goedel_lean_workspace_subdir,
+        goedel=cfg.goedel,
         goedel_backend_type=cfg.goedel_backend_type,
-        goedel_ollama_model=cfg.goedel_ollama_model,
-        goedel_ollama_host=cfg.goedel_ollama_host,
-        goedel_ollama_client_timeout=cfg.goedel_ollama_client_timeout,
-        goedel_vllm_base_url=cfg.goedel_vllm_base_url,
-        goedel_vllm_model_name=cfg.goedel_vllm_model_name,
-        goedel_vllm_api_key=cfg.goedel_vllm_api_key,
-        goedel_vllm_client_timeout=cfg.goedel_vllm_client_timeout,
-        goedel_vllm_manage_server=cfg.goedel_vllm_manage_server,
-        goedel_vllm_model_path=cfg.goedel_vllm_model_path,
-        goedel_vllm_port=cfg.goedel_vllm_port,
-        goedel_vllm_host=cfg.goedel_vllm_host,
-        goedel_vllm_server_timeout=cfg.goedel_vllm_server_timeout,
-        goedel_vllm_server_log_path=cfg.goedel_vllm_server_log_path,
-        goedel_vllm_dtype=cfg.goedel_vllm_dtype,
-        goedel_vllm_kv_cache_dtype=cfg.goedel_vllm_kv_cache_dtype,
-        goedel_vllm_gpu_memory_utilization=cfg.goedel_vllm_gpu_memory_utilization,
-        goedel_vllm_max_num_seqs=cfg.goedel_vllm_max_num_seqs,
-        goedel_vllm_stream_interval=cfg.goedel_vllm_stream_interval,
-        goedel_vllm_enable_prefix_caching=cfg.goedel_vllm_enable_prefix_caching,
-        goedel_vllm_extra_server_args=cfg.goedel_vllm_extra_server_args,
-        goedel_tokenizer_path=cfg.goedel_tokenizer_path,
-        goedel_max_error_message_chars=cfg.goedel_max_error_message_chars,
+        goedel_ollama=cfg.goedel_ollama,
+        goedel_vllm=cfg.goedel_vllm,
+        goedel_lean_workspace_subdir=cfg.goedel_lean_workspace_subdir,
         goedel_print_agent_conv=cfg.print_agent_conv,
     )
 
@@ -186,37 +134,10 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
     )
 
     # Lean compiler
-    p.add_argument(
-        "--lean-project-dir",
-        default=CheckFormalizationsConfig.lean_project_dir,
-        help="Path to a Lean project with Mathlib configured (needed for --lean-equiv).",
-    )
-    p.add_argument(
-        "--lean-workspace-subdir",
-        default=CheckFormalizationsConfig.lean_workspace_subdir,
-        help="Subdirectory inside lean_project_dir where temporary .lean files are written.",
-    )
-    p.add_argument(
-        "--lean-timeout-seconds",
-        type=int,
-        default=CheckFormalizationsConfig.lean_timeout_seconds,
-        help="Per-file Lean compilation timeout in seconds.",
-    )
-    p.add_argument(
-        "--lean-jobs",
-        type=int,
-        default=CheckFormalizationsConfig.lean_jobs,
-        help="Number of parallel jobs passed to lake env lean -j.",
-    )
-    p.add_argument(
-        "--lean-max-memory-megabytes",
-        type=int,
-        default=CheckFormalizationsConfig.lean_max_memory_megabytes,
-        help=(
-            "Maximum virtual memory (megabytes) for each lake/lean subprocess. "
-            "0 means no limit. Example: 4 * 1024 for 4 GiB."
-        ),
-    )
+    LeanCompilerConfig.add_cli_args(p, "lean", defaults={
+        "workspace_subdir": ".conjecturing_agents/answer_checking",
+        "max_memory_megabytes": 4 * 1024,
+    })
 
     # Heuristics
     p.add_argument(
@@ -268,42 +189,19 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
             "Each retry uses a different seed. Requires --goedel-disprover. Default: 1."
         ),
     )
-    p.add_argument(
-        "--goedel-max-rounds",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_max_rounds,
-        help="Self-correction rounds for Goedel prover (0 = initial attempt only).",
-    )
-    p.add_argument(
-        "--goedel-max-tokens",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_max_tokens,
-        help="Max tokens to generate per Goedel round.",
-    )
-    p.add_argument(
-        "--goedel-temperature",
-        type=float,
-        default=CheckFormalizationsConfig.goedel_temperature,
-        help="Sampling temperature for the Goedel model.",
-    )
-    p.add_argument(
-        "--goedel-top-p",
-        type=float,
-        default=CheckFormalizationsConfig.goedel_top_p,
-        help="Top-p (nucleus) sampling parameter for the Goedel model.",
-    )
-    p.add_argument(
-        "--goedel-repeat-penalty",
-        type=float,
-        default=CheckFormalizationsConfig.goedel_repeat_penalty,
-        help="Repetition penalty for the Goedel model (1.0 = no penalty).",
-    )
-    p.add_argument(
-        "--goedel-context-tokens",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_context_tokens,
-        help="Model max context length for pre-flight token budget checks.",
-    )
+
+    # Goedel prover agent + backend sub-configs
+    GoedelProverConfig.add_cli_args(p, "goedel")
+    OllamaConfig.add_cli_args(p, "goedel-ollama", defaults={
+        "model": "goedel-v2:latest",
+        "client_timeout": 1200,
+    })
+    VLLMRawConfig.add_cli_args(p, "goedel-vllm", defaults={
+        "client_timeout": 1200,
+        "server_timeout": 1200,
+    }, exclude={"tokenizer_path", "context_tokens"})
+
+    # Goedel backend selection
     p.add_argument(
         "--goedel-backend",
         dest="goedel_backend_type",
@@ -311,16 +209,15 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
         default=CheckFormalizationsConfig.goedel_backend_type,
         help="Inference backend for the Goedel prover.",
     )
+
+    # Goedel lean workspace (separate from main lean workspace)
     p.add_argument(
-        "--goedel-ollama-model",
-        default=CheckFormalizationsConfig.goedel_ollama_model,
-        help="Ollama model name (backend=ollama).",
+        "--goedel-lean-workspace-subdir",
+        default=CheckFormalizationsConfig.goedel_lean_workspace_subdir,
+        help="Lean workspace subdir for Goedel prover runs.",
     )
-    p.add_argument(
-        "--goedel-ollama-host",
-        default=CheckFormalizationsConfig.goedel_ollama_host,
-        help="Ollama server URL (backend=ollama). Ignored when --goedel-ollama-hosts is set.",
-    )
+
+    # Load-balanced Ollama (script-level)
     p.add_argument(
         "--goedel-ollama-hosts",
         nargs="+",
@@ -343,124 +240,7 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
             "Default: %(default)s."
         ),
     )
-    p.add_argument(
-        "--goedel-ollama-client-timeout",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_ollama_client_timeout,
-        help="HTTP client timeout in seconds for Ollama requests (backend=ollama).",
-    )
-    p.add_argument(
-        "--goedel-vllm-base-url",
-        default=CheckFormalizationsConfig.goedel_vllm_base_url,
-        help="vLLM OpenAI-compatible base URL (backend=vllm).",
-    )
-    p.add_argument(
-        "--goedel-vllm-model-name",
-        default=CheckFormalizationsConfig.goedel_vllm_model_name,
-        help="Served model name for the vLLM endpoint (backend=vllm).",
-    )
-    p.add_argument(
-        "--goedel-vllm-api-key",
-        default=CheckFormalizationsConfig.goedel_vllm_api_key,
-        help="API key for the vLLM endpoint (backend=vllm).",
-    )
-    p.add_argument(
-        "--goedel-vllm-client-timeout",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_vllm_client_timeout,
-        help="HTTP client timeout in seconds for vLLM requests (backend=vllm).",
-    )
-    p.add_argument(
-        "--goedel-vllm-manage-server",
-        dest="goedel_vllm_manage_server",
-        action="store_true",
-        default=CheckFormalizationsConfig.goedel_vllm_manage_server,
-        help="Start and manage a vLLM server subprocess (backend=vllm).",
-    )
-    p.add_argument(
-        "--goedel-vllm-model-path",
-        default=CheckFormalizationsConfig.goedel_vllm_model_path,
-        help="Path to the model weights (required when --goedel-vllm-manage-server is set).",
-    )
-    p.add_argument(
-        "--goedel-vllm-port",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_vllm_port,
-        help="Port for the managed vLLM server (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-host",
-        default=CheckFormalizationsConfig.goedel_vllm_host,
-        help="Host for the managed vLLM server (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-server-timeout",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_vllm_server_timeout,
-        help="Seconds to wait for the vLLM server to become ready (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-server-log-path",
-        default=CheckFormalizationsConfig.goedel_vllm_server_log_path,
-        help="File path for vLLM server stdout/stderr logs (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-dtype",
-        default=CheckFormalizationsConfig.goedel_vllm_dtype,
-        help="Model weight dtype passed to vLLM (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-kv-cache-dtype",
-        default=CheckFormalizationsConfig.goedel_vllm_kv_cache_dtype,
-        help="KV-cache dtype passed to vLLM (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-gpu-memory-utilization",
-        type=float,
-        default=CheckFormalizationsConfig.goedel_vllm_gpu_memory_utilization,
-        help="GPU memory utilization fraction for vLLM (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-max-num-seqs",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_vllm_max_num_seqs,
-        help="Maximum number of concurrent sequences for vLLM (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-stream-interval",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_vllm_stream_interval,
-        help="Token streaming interval for vLLM (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-no-prefix-caching",
-        dest="goedel_vllm_enable_prefix_caching",
-        action="store_false",
-        default=CheckFormalizationsConfig.goedel_vllm_enable_prefix_caching,
-        help="Disable prefix caching in vLLM (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-vllm-extra-server-args",
-        nargs="*",
-        default=[],
-        help="Extra CLI arguments forwarded verbatim to the vLLM server (backend=vllm, manage-server=True).",
-    )
-    p.add_argument(
-        "--goedel-tokenizer-path",
-        default=CheckFormalizationsConfig.goedel_tokenizer_path,
-        help="HF tokenizer path for exact token counting (required when --goedel is set).",
-    )
-    p.add_argument(
-        "--goedel-max-error-message-chars",
-        type=int,
-        default=CheckFormalizationsConfig.goedel_max_error_message_chars,
-        help=(
-            "Truncate each Lean error message (error['data']) to this many characters "
-            "in the correction prompt. Prevents tactics like interval_cases from "
-            "producing thousands of unsolved-goal entries that blow up the context window. "
-            "0 = no truncation (default). Suggested value: 2000."
-        ),
-    )
+
     p.add_argument(
         "--print-agent-conv",
         dest="print_agent_conv",
@@ -515,48 +295,22 @@ def parse_args_and_validate() -> CheckFormalizationsConfig:
     cfg = CheckFormalizationsConfig(
         formalizations_path=args.formalizations_path,
         output_path=args.output_path,
-        lean_project_dir=args.lean_project_dir,
-        lean_workspace_subdir=args.lean_workspace_subdir,
-        lean_timeout_seconds=args.lean_timeout_seconds,
-        lean_jobs=args.lean_jobs,
-        lean_max_memory_megabytes=args.lean_max_memory_megabytes,
+        lean=LeanCompilerConfig.from_parsed_args(args, "lean"),
         use_string_match=args.use_string_match,
         use_lean_equiv=args.use_lean_equiv,
         use_goedel_prover=args.use_goedel_prover,
         use_goedel_disprover=args.use_goedel_disprover,
         goedel_proof_retries=args.goedel_proof_retries,
         goedel_disproof_retries=args.goedel_disproof_retries,
-        goedel_max_rounds=args.goedel_max_rounds,
-        goedel_max_tokens=args.goedel_max_tokens,
-        goedel_temperature=args.goedel_temperature,
-        goedel_top_p=args.goedel_top_p,
-        goedel_repeat_penalty=args.goedel_repeat_penalty,
-        goedel_context_tokens=args.goedel_context_tokens,
+        goedel=GoedelProverConfig.from_parsed_args(args, "goedel"),
         goedel_backend_type=args.goedel_backend_type,
-        goedel_ollama_model=args.goedel_ollama_model,
-        goedel_ollama_host=args.goedel_ollama_host,
+        goedel_ollama=OllamaConfig.from_parsed_args(args, "goedel-ollama"),
+        goedel_vllm=VLLMRawConfig.from_parsed_args(args, "goedel-vllm",
+            exclude={"tokenizer_path", "context_tokens"},
+        ),
+        goedel_lean_workspace_subdir=args.goedel_lean_workspace_subdir,
         goedel_ollama_hosts=args.goedel_ollama_hosts or [],
         goedel_ollama_max_concurrent=args.goedel_ollama_max_concurrent,
-        goedel_ollama_client_timeout=args.goedel_ollama_client_timeout,
-        goedel_vllm_base_url=args.goedel_vllm_base_url,
-        goedel_vllm_model_name=args.goedel_vllm_model_name,
-        goedel_vllm_api_key=args.goedel_vllm_api_key,
-        goedel_vllm_client_timeout=args.goedel_vllm_client_timeout,
-        goedel_vllm_manage_server=args.goedel_vllm_manage_server,
-        goedel_vllm_model_path=args.goedel_vllm_model_path,
-        goedel_vllm_port=args.goedel_vllm_port,
-        goedel_vllm_host=args.goedel_vllm_host,
-        goedel_vllm_server_timeout=args.goedel_vllm_server_timeout,
-        goedel_vllm_server_log_path=args.goedel_vllm_server_log_path,
-        goedel_vllm_dtype=args.goedel_vllm_dtype,
-        goedel_vllm_kv_cache_dtype=args.goedel_vllm_kv_cache_dtype,
-        goedel_vllm_gpu_memory_utilization=args.goedel_vllm_gpu_memory_utilization,
-        goedel_vllm_max_num_seqs=args.goedel_vllm_max_num_seqs,
-        goedel_vllm_stream_interval=args.goedel_vllm_stream_interval,
-        goedel_vllm_enable_prefix_caching=args.goedel_vllm_enable_prefix_caching,
-        goedel_vllm_extra_server_args=args.goedel_vllm_extra_server_args or [],
-        goedel_tokenizer_path=args.goedel_tokenizer_path,
-        goedel_max_error_message_chars=args.goedel_max_error_message_chars,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,
         max_records=args.max_records,

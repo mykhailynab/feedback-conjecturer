@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from conjecturing_agents.agents.conjecture_formalizer import (
     extract_rhs_from_abbrev_declaration,
 )
+from conjecturing_agents.agents.goedel_prover.config import GoedelProverConfig
 from conjecturing_agents.inference_backends.raw_base import EventLoggerFn
+from conjecturing_agents.inference_backends.ollama_raw import OllamaConfig
+from conjecturing_agents.inference_backends.vllm_raw import VLLMRawConfig
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
     LeanCompilerBackend,
     LeanCompilerConfig,
@@ -22,13 +25,12 @@ from .goedel_equiv import check_goedel_equiv, check_goedel_inequiv
 @dataclass
 class AnswerCheckerConfig:
     # Lean project settings (required for heuristics 2 and 3)
-    lean_project_dir: str = "."
-    lean_workspace_subdir: str = ".conjecturing_agents/answer_checking"
-    lean_timeout_seconds: int = 120
-    lean_jobs: int = 4
-
-    # Memory limit for the lake/lean subprocess (bytes); 0 = no limit
-    lean_max_memory_megabytes: int = 4 * 1024  # 4 GiB
+    lean: LeanCompilerConfig = field(
+        default_factory=lambda: LeanCompilerConfig(
+            project_dir=".",
+            workspace_subdir=".conjecturing_agents/answer_checking",
+        )
+    )
 
     # Which heuristics to run
     use_string_match: bool = True
@@ -43,46 +45,13 @@ class AnswerCheckerConfig:
     goedel_disproof_retries: int = 1
 
     # ------------------------------------------------------------------ #
-    # Goedel prover (heuristic 3)
+    # Goedel prover (heuristic 3) — composed sub-configs
     # ------------------------------------------------------------------ #
-    goedel_max_rounds: int = 2
-    goedel_max_tokens: int = 16384
-    goedel_temperature: float = 0.6
-    goedel_top_p: float = 0.95
-    goedel_repeat_penalty: float = 1.0
-    goedel_context_tokens: int = 40960
+    goedel: GoedelProverConfig = field(default_factory=GoedelProverConfig)
+    goedel_backend_type: str = "ollama"  # "ollama" | "vllm"
+    goedel_ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    goedel_vllm: VLLMRawConfig = field(default_factory=VLLMRawConfig)
     goedel_lean_workspace_subdir: str = ".conjecturing_agents/goedel_lean_runs"
-    goedel_max_error_message_chars: int = 0
-
-    # "ollama" or "vllm"
-    goedel_backend_type: str = "ollama"
-
-    # Ollama backend
-    goedel_ollama_model: str = "goedel-v2"
-    goedel_ollama_host: str = "http://localhost:11434"
-    goedel_ollama_client_timeout: int = 240
-
-    # vLLM backend (used when goedel_backend_type="vllm")
-    goedel_vllm_base_url: str = "http://0.0.0.0:8001/v1"
-    goedel_vllm_model_name: str = "goedel"
-    goedel_vllm_api_key: str = "sk-local"
-    goedel_vllm_client_timeout: int = 240
-    goedel_vllm_manage_server: bool = False
-    goedel_vllm_model_path: str = ""
-    goedel_vllm_port: int = 8001
-    goedel_vllm_host: str = "0.0.0.0"
-    goedel_vllm_server_timeout: int = 240
-    goedel_vllm_server_log_path: str = "vllm_goedel_server.log"
-    goedel_vllm_dtype: str = "bfloat16"
-    goedel_vllm_kv_cache_dtype: str = "fp8_e4m3"
-    goedel_vllm_gpu_memory_utilization: float = 0.96
-    goedel_vllm_max_num_seqs: int = 32
-    goedel_vllm_stream_interval: int = 200
-    goedel_vllm_enable_prefix_caching: bool = True
-    goedel_vllm_extra_server_args: List[str] = field(default_factory=list)
-
-    # HF tokenizer path for exact token counting (required for either backend)
-    goedel_tokenizer_path: str = ""
 
     # Print prompts and generated tokens to stdout in real time
     goedel_print_agent_conv: bool = False
@@ -131,12 +100,8 @@ class AnswerChecker:
 
     def _get_compiler(self) -> LeanCompilerBackend:
         if self._compiler is None:
-            lean_cfg = LeanCompilerConfig(
-                project_dir=self.cfg.lean_project_dir,
-                workspace_subdir=self.cfg.lean_workspace_subdir,
-                timeout_seconds=self.cfg.lean_timeout_seconds,
-                lean_jobs=self.cfg.lean_jobs,
-                max_memory_megabytes=self.cfg.lean_max_memory_megabytes,
+            lean_cfg = replace(
+                self.cfg.lean,
                 treat_sorry_warning_as_failure=True,
                 treat_any_warning_as_failure=False,
             )
@@ -149,30 +114,15 @@ class AnswerChecker:
 
     def _get_goedel(self):
         if self._goedel_agent is None:
-            from conjecturing_agents.agents.goedel_prover import (
-                GoedelProverAgent,
-                GoedelProverConfig,
-            )
-            goedel_lean_cfg = LeanCompilerConfig(
-                project_dir=self.cfg.lean_project_dir,
+            from conjecturing_agents.agents.goedel_prover import GoedelProverAgent
+
+            goedel_lean_cfg = replace(
+                self.cfg.lean,
                 workspace_subdir=self.cfg.goedel_lean_workspace_subdir,
-                timeout_seconds=self.cfg.lean_timeout_seconds,
-                lean_jobs=self.cfg.lean_jobs,
-                max_memory_megabytes=self.cfg.lean_max_memory_megabytes,
                 treat_sorry_warning_as_failure=True,
                 treat_any_warning_as_failure=False,
             )
-            goedel_cfg = GoedelProverConfig(
-                tokenizer_path=self.cfg.goedel_tokenizer_path,
-                max_rounds=self.cfg.goedel_max_rounds,
-                max_tokens=self.cfg.goedel_max_tokens,
-                temperature=self.cfg.goedel_temperature,
-                top_p=self.cfg.goedel_top_p,
-                repeat_penalty=self.cfg.goedel_repeat_penalty,
-                context_tokens=self.cfg.goedel_context_tokens,
-                lean=goedel_lean_cfg,
-                max_error_message_chars=self.cfg.goedel_max_error_message_chars,
-            )
+            goedel_cfg = replace(self.cfg.goedel, lean=goedel_lean_cfg)
             self._goedel_agent = GoedelProverAgent(goedel_cfg)
 
             # Only build a backend if one was not injected via __init__.
@@ -180,40 +130,22 @@ class AnswerChecker:
                 if self.cfg.goedel_backend_type == "vllm":
                     from conjecturing_agents.inference_backends.vllm_raw import (
                         VLLMRawBackend,
-                        VLLMRawConfig,
                     )
-                    self._goedel_backend = VLLMRawBackend(VLLMRawConfig(
-                        base_url=self.cfg.goedel_vllm_base_url,
-                        served_model_name=self.cfg.goedel_vllm_model_name,
-                        api_key=self.cfg.goedel_vllm_api_key,
-                        client_timeout=self.cfg.goedel_vllm_client_timeout,
-                        tokenizer_path=self.cfg.goedel_tokenizer_path,
-                        manage_server=self.cfg.goedel_vllm_manage_server,
-                        model_path=self.cfg.goedel_vllm_model_path,
-                        port=self.cfg.goedel_vllm_port,
-                        host=self.cfg.goedel_vllm_host,
-                        server_timeout=self.cfg.goedel_vllm_server_timeout,
-                        server_log_path=self.cfg.goedel_vllm_server_log_path,
-                        dtype=self.cfg.goedel_vllm_dtype,
-                        kv_cache_dtype=self.cfg.goedel_vllm_kv_cache_dtype,
-                        context_tokens=self.cfg.goedel_context_tokens,
-                        gpu_memory_utilization=self.cfg.goedel_vllm_gpu_memory_utilization,
-                        max_num_seqs=self.cfg.goedel_vllm_max_num_seqs,
-                        stream_interval=self.cfg.goedel_vllm_stream_interval,
-                        enable_prefix_caching=self.cfg.goedel_vllm_enable_prefix_caching,
-                        extra_server_args=self.cfg.goedel_vllm_extra_server_args,
-                    ))
+                    vllm_cfg = replace(
+                        self.cfg.goedel_vllm,
+                        tokenizer_path=self.cfg.goedel.tokenizer_path,
+                        context_tokens=self.cfg.goedel.context_tokens,
+                    )
+                    self._goedel_backend = VLLMRawBackend(vllm_cfg)
                 else:
                     from conjecturing_agents.inference_backends.ollama_raw import (
                         OllamaBackend,
-                        OllamaConfig,
                     )
-                    self._goedel_backend = OllamaBackend(OllamaConfig(
-                        model=self.cfg.goedel_ollama_model,
-                        host=self.cfg.goedel_ollama_host,
-                        client_timeout=self.cfg.goedel_ollama_client_timeout,
-                        tokenizer_path=self.cfg.goedel_tokenizer_path,
-                    ))
+                    ollama_cfg = replace(
+                        self.cfg.goedel_ollama,
+                        tokenizer_path=self.cfg.goedel.tokenizer_path,
+                    )
+                    self._goedel_backend = OllamaBackend(ollama_cfg)
                 self._owns_goedel_backend = True
 
                 if self.cfg.goedel_print_agent_conv:

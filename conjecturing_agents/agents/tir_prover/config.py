@@ -3,6 +3,7 @@ Configuration and result types for the TIR prover agent.
 """
 from __future__ import annotations
 
+from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -47,6 +48,102 @@ class TIRProverConfig:
 
     # Jupyter kernel config — used only when use_python_tool=True.
     jupyter: JupyterKernelConfig = field(default_factory=JupyterKernelConfig)
+
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_cli_args(
+        cls,
+        parser: ArgumentParser,
+        prefix: str = "tir",
+        defaults: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register CLI args for user-facing TIRProverConfig fields.
+
+        Internal fields (name, prompts, lean, jupyter) stay at defaults and
+        are overridden in factory helpers.
+        """
+        d = defaults or {}
+        pre = prefix
+        dst = prefix.replace("-", "_")
+        defs = cls()
+
+        parser.add_argument(
+            f"--{pre}-max-tokens",
+            dest=f"{dst}_max_tokens",
+            type=int,
+            default=d.get("max_tokens", defs.max_tokens),
+            help="Max tokens to generate per TIR turn. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-temperature",
+            dest=f"{dst}_temperature",
+            type=float,
+            default=d.get("temperature", defs.temperature),
+            help="Sampling temperature for the TIR prover. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-top-p",
+            dest=f"{dst}_top_p",
+            type=float,
+            default=d.get("top_p", defs.top_p),
+            help="Top-p (nucleus) sampling for the TIR prover. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-max-turns",
+            dest=f"{dst}_max_turns",
+            type=int,
+            default=d.get("max_turns", defs.max_turns),
+            help="Maximum tool-call turns per TIR session. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-timeout-seconds",
+            dest=f"{dst}_timeout_seconds",
+            type=float,
+            default=d.get("timeout_seconds", defs.timeout_seconds),
+            help="Wall-clock timeout (seconds) per TIR session. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-no-lean-tool",
+            dest=f"{dst}_use_lean_tool",
+            action="store_false",
+            default=d.get("use_lean_tool", defs.use_lean_tool),
+            help="Disable the intermediate lean tool (lean_final is always available).",
+        )
+        parser.add_argument(
+            f"--{pre}-no-python-tool",
+            dest=f"{dst}_use_python_tool",
+            action="store_false",
+            default=d.get("use_python_tool", defs.use_python_tool),
+            help="Disable the Python (Jupyter) tool for the TIR prover.",
+        )
+
+    @classmethod
+    def from_parsed_args(
+        cls,
+        args: Any,
+        prefix: str = "tir",
+        **overrides: Any,
+    ) -> "TIRProverConfig":
+        """Construct from an argparse namespace.
+
+        Internal fields (name, prompts, lean, jupyter) stay at defaults
+        unless provided via ``overrides``.
+        """
+        dst = prefix.replace("-", "_")
+        kwargs: Dict[str, Any] = {
+            "max_tokens": getattr(args, f"{dst}_max_tokens"),
+            "temperature": getattr(args, f"{dst}_temperature"),
+            "top_p": getattr(args, f"{dst}_top_p"),
+            "max_turns": getattr(args, f"{dst}_max_turns"),
+            "timeout_seconds": getattr(args, f"{dst}_timeout_seconds"),
+            "use_lean_tool": getattr(args, f"{dst}_use_lean_tool"),
+            "use_python_tool": getattr(args, f"{dst}_use_python_tool"),
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
 
 
 @dataclass

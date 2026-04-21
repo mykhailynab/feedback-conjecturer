@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 import threading
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 from typing import Any, Dict, Iterator, List, Optional
@@ -54,6 +55,122 @@ class OllamaTIRConfig:
     # Path to the HuggingFace tokenizer directory for this model
     # (e.g. "tokenizers/Qwen3.5-27B").
     tokenizer_path: str = ""
+
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_cli_args(
+        cls,
+        parser: ArgumentParser,
+        prefix: str = "tir",
+        defaults: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register CLI args for OllamaTIRConfig fields.
+
+        Uses a SPLIT prefix convention matching the existing CLI:
+        - Server connection fields use ``--{prefix}-ollama-{field}``
+        - Model/sampling fields use ``--{prefix}-{field}``
+        """
+        d = defaults or {}
+        pre = prefix
+        dst = prefix.replace("-", "_")
+        defs = cls()
+
+        # Server connection fields → --{prefix}-ollama-{field}
+        parser.add_argument(
+            f"--{pre}-ollama-model",
+            dest=f"{dst}_ollama_model",
+            default=d.get("model", defs.model),
+            help=f"Ollama model name for the {prefix} backend. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-ollama-host",
+            dest=f"{dst}_ollama_host",
+            default=d.get("host", defs.host),
+            help=f"Ollama server URL for the {prefix} backend. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-ollama-client-timeout",
+            dest=f"{dst}_ollama_client_timeout",
+            type=int,
+            default=d.get("client_timeout", defs.client_timeout),
+            help=f"HTTP client timeout (seconds) for the {prefix} Ollama backend. Default: %(default)s.",
+        )
+
+        # Model/sampling fields → --{prefix}-{field}
+        parser.add_argument(
+            f"--{pre}-no-think",
+            dest=f"{dst}_think",
+            action="store_false",
+            default=d.get("think", defs.think),
+            help="Disable extended thinking for the model.",
+        )
+        parser.add_argument(
+            f"--{pre}-top-k",
+            dest=f"{dst}_top_k",
+            type=int,
+            default=d.get("top_k", defs.top_k),
+            help="Top-k sampling. -1 = disabled. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-min-p",
+            dest=f"{dst}_min_p",
+            type=float,
+            default=d.get("min_p", defs.min_p),
+            help="Min-p sampling. 0.0 = disabled. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-presence-penalty",
+            dest=f"{dst}_presence_penalty",
+            type=float,
+            default=d.get("presence_penalty", defs.presence_penalty),
+            help="Presence penalty. 0.0 = no penalty. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-repeat-penalty",
+            dest=f"{dst}_repeat_penalty",
+            type=float,
+            default=d.get("repeat_penalty", defs.repeat_penalty),
+            help="Repetition penalty. 1.0 = disabled. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-tokenizer-path",
+            dest=f"{dst}_tokenizer_path",
+            default=d.get("tokenizer_path", defs.tokenizer_path),
+            help=(
+                "Path to the HuggingFace tokenizer directory for the model. "
+                "Required when --limit-prover-tokens is used."
+            ),
+        )
+
+    @classmethod
+    def from_parsed_args(
+        cls,
+        args: Any,
+        prefix: str = "tir",
+        **overrides: Any,
+    ) -> "OllamaTIRConfig":
+        """Construct from an argparse namespace.
+
+        Reads server fields from ``{prefix}_ollama_*`` attrs and model fields
+        from ``{prefix}_*`` attrs, matching the split prefix convention.
+        """
+        dst = prefix.replace("-", "_")
+        kwargs: Dict[str, Any] = {
+            "model": getattr(args, f"{dst}_ollama_model"),
+            "host": getattr(args, f"{dst}_ollama_host"),
+            "client_timeout": getattr(args, f"{dst}_ollama_client_timeout"),
+            "think": getattr(args, f"{dst}_think"),
+            "top_k": getattr(args, f"{dst}_top_k"),
+            "min_p": getattr(args, f"{dst}_min_p"),
+            "presence_penalty": getattr(args, f"{dst}_presence_penalty"),
+            "repeat_penalty": getattr(args, f"{dst}_repeat_penalty"),
+            "tokenizer_path": getattr(args, f"{dst}_tokenizer_path"),
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
 
 
 class OllamaTIRBackend(TIRBackend):

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import time
 import threading
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -48,6 +49,79 @@ class LlamaCppTIRConfig:
     # Token counting (required for --limit-prover-tokens support).
     # ------------------------------------------------------------------ #
     tokenizer_path: str = ""
+
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_cli_args(
+        cls,
+        parser: ArgumentParser,
+        prefix: str = "llamacpp",
+        defaults: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register CLI args for LlamaCppTIRConfig fields.
+
+        ``tokenizer_path`` is excluded — it is typically wired from the
+        agent-level tokenizer setting.
+        """
+        d = defaults or {}
+        pre = prefix
+        dst = prefix.replace("-", "_")
+        defs = cls()
+
+        parser.add_argument(
+            f"--{pre}-base-url",
+            dest=f"{dst}_base_url",
+            default=d.get("base_url", defs.base_url),
+            help="llama.cpp server URL (without /v1). Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-model",
+            dest=f"{dst}_model",
+            default=d.get("model", defs.model),
+            help="Model name for llama.cpp requests.",
+        )
+        parser.add_argument(
+            f"--{pre}-api-key",
+            dest=f"{dst}_api_key",
+            default=d.get("api_key", defs.api_key),
+            help="API key for the llama.cpp endpoint.",
+        )
+        parser.add_argument(
+            f"--{pre}-client-timeout",
+            dest=f"{dst}_client_timeout",
+            type=int,
+            default=d.get("client_timeout", defs.client_timeout),
+            help="HTTP client timeout in seconds. Default: %(default)s.",
+        )
+        parser.add_argument(
+            f"--{pre}-presence-penalty",
+            dest=f"{dst}_presence_penalty",
+            type=float,
+            default=d.get("presence_penalty", defs.presence_penalty),
+            help="Presence penalty (per-request). Default: %(default)s.",
+        )
+
+    @classmethod
+    def from_parsed_args(
+        cls,
+        args: Any,
+        prefix: str = "llamacpp",
+        **overrides: Any,
+    ) -> "LlamaCppTIRConfig":
+        """Construct from an argparse namespace."""
+        dst = prefix.replace("-", "_")
+        kwargs: Dict[str, Any] = {
+            "base_url": getattr(args, f"{dst}_base_url"),
+            "model": getattr(args, f"{dst}_model"),
+            "api_key": getattr(args, f"{dst}_api_key"),
+            "client_timeout": getattr(args, f"{dst}_client_timeout"),
+            "presence_penalty": getattr(args, f"{dst}_presence_penalty"),
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
 
 
 class LlamaCppTIRBackend(TIRBackend):

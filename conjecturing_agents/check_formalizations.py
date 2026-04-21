@@ -29,8 +29,13 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import replace as _replace
 
 from tqdm import tqdm
+from conjecturing_agents.inference_backends.ollama_raw import OllamaBackend
+from conjecturing_agents.inference_backends.load_balanced_backend_raw import (
+    LoadBalancedRawBackend,
+)
 
 from conjecturing_agents.answer_checking.checker import AnswerChecker
 from conjecturing_agents.tools import load_jsonl
@@ -98,20 +103,12 @@ def main() -> None:
     # per-host concurrency limits are enforced globally.
     shared_goedel_backend = None
     if checker_cfg.use_goedel_prover and cfg.goedel_ollama_hosts:
-        from conjecturing_agents.inference_backends.ollama_raw import (
-            OllamaBackend,
-            OllamaConfig,
-        )
-        from conjecturing_agents.inference_backends.load_balanced_backend_raw import (
-            LoadBalancedRawBackend,
+        ollama_cfg = _replace(
+            checker_cfg.goedel_ollama,
+            tokenizer_path=checker_cfg.goedel.tokenizer_path,
         )
         sub_backends = [
-            OllamaBackend(OllamaConfig(
-                model=checker_cfg.goedel_ollama_model,
-                host=host,
-                client_timeout=checker_cfg.goedel_ollama_client_timeout,
-                tokenizer_path=checker_cfg.goedel_tokenizer_path,
-            ))
+            OllamaBackend(_replace(ollama_cfg, host=host))
             for host in cfg.goedel_ollama_hosts
         ]
         shared_goedel_backend = LoadBalancedRawBackend(
