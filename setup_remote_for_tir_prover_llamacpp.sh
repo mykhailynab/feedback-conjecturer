@@ -110,7 +110,7 @@ download_model() {
         echo "already downloaded" > "$GGUF_LOG"
         return 0
     fi
-    huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
+    hf download unsloth/Qwen3.6-35B-A3B-GGUF \
         --local-dir "$MODEL_DIR" \
         --include "*mmproj-F16*" \
         --include "*UD-Q5_K_XL*" \
@@ -211,18 +211,38 @@ echo "mathlib4 ready"
 # 5. Install llama.cpp
 # ============================================================
 
-step "Installing llama.cpp"
-if command -v llama-server &>/dev/null; then
-    echo "llama-server already installed: $(llama-server --version 2>&1 | head -1)"
+step "Installing llama.cpp (build from source with CUDA)"
+
+LLAMACPP_DIR="$PROJECT_DIR/llama.cpp"
+LLAMA_SERVER="$LLAMACPP_DIR/llama-server"
+
+if [[ -x "$LLAMA_SERVER" ]]; then
+    echo "llama-server already built: $LLAMA_SERVER"
 else
-    echo "Installing llama.cpp via pip (llama-cpp-python[server])..."
-    pip install llama-cpp-python[server] \
-        || die "Failed to install llama-cpp-python"
+    apt-get update -q || die "apt-get update failed"
+    apt-get install -y pciutils build-essential cmake curl libcurl4-openssl-dev \
+        || die "Failed to install build dependencies"
+
+    if [[ ! -d "$LLAMACPP_DIR/.git" ]]; then
+        git clone https://github.com/ggml-org/llama.cpp "$LLAMACPP_DIR" \
+            || die "Failed to clone llama.cpp"
+    fi
+
+    cmake "$LLAMACPP_DIR" -B "$LLAMACPP_DIR/build" \
+        -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON \
+        || die "cmake configure failed"
+
+    cmake --build "$LLAMACPP_DIR/build" --config Release -j --clean-first \
+        --target llama-cli llama-mtmd-cli llama-server llama-gguf-split \
+        || die "cmake build failed"
+
+    cp "$LLAMACPP_DIR"/build/bin/llama-* "$LLAMACPP_DIR/" \
+        || die "Failed to copy built binaries"
 fi
 
 # Verify llama-server is available
-command -v llama-server &>/dev/null \
-    || die "llama-server not found after installation. Install llama.cpp manually."
+[[ -x "$LLAMA_SERVER" ]] \
+    || die "llama-server not found after build. Check build logs."
 
 # ============================================================
 # 6. Start llama-server
@@ -233,28 +253,28 @@ step "Starting llama-server (port $LLAMACPP_PORT, -np $PARALLELISM, ctx_size $CT
 if curl -sf "http://localhost:$LLAMACPP_PORT/health" &>/dev/null; then
     echo "llama-server already running on port $LLAMACPP_PORT"
 else
-    echo "Launching llama-server..."
-    nohup llama-server \
-        --model "$GGUF_PATH" \
-        --mmproj "$MMPROJ_PATH" \
-        --alias "$MODEL_ALIAS" \
-        --temp "$TEMPERATURE" \
-        --top-p "$TOP_P" \
-        --min-p "$MIN_P" \
-        --top-k "$TOP_K" \
-        --ctx-size "$CTX_SIZE" \
-        --port "$LLAMACPP_PORT" \
-        -np "$PARALLELISM" \
-        > /var/log/llama-server.log 2>&1 &
-    LLAMA_PID=$!
-    echo "Waiting for llama-server to become ready (PID $LLAMA_PID)..."
+    echo "Launching llama-server in screen session 'llama-server'..."
+    screen -dmS llama-server bash -c \
+        "\"$LLAMA_SERVER\" \
+        --model \"$GGUF_PATH\" \
+        --mmproj \"$MMPROJ_PATH\" \
+        --alias \"$MODEL_ALIAS\" \
+        --temp $TEMPERATURE \
+        --top-p $TOP_P \
+        --min-p $MIN_P \
+        --top-k $TOP_K \
+        --ctx-size $CTX_SIZE \
+        --port $LLAMACPP_PORT \
+        -np $PARALLELISM \
+        2>&1 | tee /var/log/llama-server.log"
+    echo "Waiting for llama-server to become ready..."
     for i in $(seq 1 120); do
         if curl -sf "http://localhost:$LLAMACPP_PORT/health" &>/dev/null; then
             echo "llama-server is ready"
             break
         fi
-        if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
-            die "llama-server process exited unexpectedly (check /var/log/llama-server.log)"
+        if ! screen -list | grep -q "llama-server"; then
+            die "llama-server screen session exited unexpectedly (check /var/log/llama-server.log)"
         fi
         if [[ $i -eq 120 ]]; then
             die "llama-server did not become ready after 120 s (check /var/log/llama-server.log)"
