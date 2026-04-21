@@ -38,6 +38,10 @@ block — the compiler needs the full file to resolve imports and namespaces.
 `simp`, `omega`, `linarith`, `nlinarith`, `decide`, or `native_decide` often close goals.
 - Refine and retry until the lean tool returns [OK] for all parts of the proof.
 
+You should rely on this tool whenever you write a complete (full, or partial) proof. When in doubt, \
+send code to the lean tool to verify. Do not rely on your own reasoning when writing lean code — rely \
+on this tool instead.
+
 Returns:
   [OK] Lean compilation succeeded.   — the proof is accepted.
   [ERROR] Lean compilation failed.   — followed by annotated diagnostics showing \

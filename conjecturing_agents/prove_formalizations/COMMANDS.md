@@ -141,7 +141,7 @@ cp -r logs/stripped_formalizations_goedel_pass/ logs/test_prove_formalizations &
 ```
 ### LLamacpp:
 ```sh
-rm -rf logs/test_prove_formalizations && \
+rm -rf logs/test_prove_formalizations && \                                 
 cp -r logs/stripped_formalizations_goedel_pass/ logs/test_prove_formalizations && \
   python conjecturing_agents/prove_formalizations.py \
        --formalizations-path logs/test_prove_formalizations/formalizations.jsonl \
@@ -155,7 +155,8 @@ cp -r logs/stripped_formalizations_goedel_pass/ logs/test_prove_formalizations &
        --tir-llamacpp-presence-penalty 0.0 \
        --tir-llamacpp-tokenizer-path tokenizers/Qwen3.5-27B \
        --parallelism 1 \
-       --limit-prover-tokens 1000 \
+       --limit-prover-tokens 262144 \
+       --tir-max-tokens 32768 \
        --max-records 1 \
        --print-agent-conv
 ```
