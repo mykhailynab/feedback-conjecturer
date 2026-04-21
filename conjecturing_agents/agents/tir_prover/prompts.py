@@ -21,6 +21,8 @@ provide a detailed proof plan outlining the main proof steps and strategies.
 The plan should highlight key ideas, intermediate lemmas, and proof structures \
 that will guide the construction of the final formal proof.
 
+Use tools to verify your reasoning (if available).
+
 Once you have a proof that compiles successfully, submit it with the lean_final tool.\
 """
 
