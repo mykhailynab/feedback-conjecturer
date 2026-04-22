@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 import pandas as pd
 import polars as pl
 
-LOG_DIR = Path("logs/local_qwen3_conjecturing_pass1")
+LOG_DIR = Path("logs/putnam_120b_tir_pass4_20min")
 # LOG_DIR = Path("aimo3_logs_20b")
 # LOG_DIR = Path("aimo3_logs_20b_12_24")
 REF_PATH = Path("data/conjecture_formalizer_inputs/references_putnam.csv")

@@ -110,7 +110,7 @@ def load_attempts_jsonl(path: Path) -> pd.DataFrame:
                 continue
 
             rows.append({
-                "id": str(obj.get("problem_id", "")),
+                "id": str(obj.get("problem_id", obj.get("id", ""))),
                 "attempt": safe_int(obj.get("attempt")),
                 "attempt_answer": obj.get("attempt_answer"),
                 "entropy": safe_float(obj.get("entropy")),
@@ -267,7 +267,7 @@ def main():
         if any_ok:
             any_correct += 1
 
-        maj_count = len(dfp) // 2 + len(dfp) % 2
+        maj_count = len(dfp) // 2 + len(dfp) % 2 + 1
         maj_ok = bool((dfp["is_correct"]).sum() >= maj_count)
         if maj_ok:
             maj_correct += 1
@@ -320,14 +320,15 @@ def main():
     print(f"Attempts: {n_attempts}  (avg {n_attempts / n_problems:.2f} per problem)")
     print("------------------------------------------------------------------")
     print("Attempt-level stats")
-    print(f"  Accuracy (all attempts):     {attempt_acc_all:.2%}  ({n_correct}/{n_attempts})")
-    print(f"  Attempts w/ truth result:    {n_with_truth/n_attempts:.2%}  ({n_with_truth}/{n_attempts})")
-    print(f"  Accuracy (among answered):   {attempt_acc_answered:.2%}  ({n_correct}/{n_answered})")
-    print(f"  Answer rate:                 {answer_rate:.2%}  ({n_answered}/{n_attempts})")
+    print(f"  Accuracy (all attempts):           {attempt_acc_all:.2%}  ({n_correct}/{n_attempts}) (if we treat failed equivalence checks and no-answer attempts as equivalent=False)")
+    print(f"  Answer rate:                       {answer_rate:.2%}  ({n_answered}/{n_attempts})")
+    print(f"  w/ equiv. result (among answered): {n_with_truth/n_answered:.2%}  ({n_with_truth}/{n_answered}) (here, answer equivalence checker produced an output)")
+    print(f"  Accuracy (among w/ equiv. result): {n_correct/n_with_truth:.2%}  ({n_correct}/{n_with_truth})")
+    print(f"  Accuracy:                          {n_correct/n_answered:.2%}  ({n_correct}/{n_answered}) (if we treat failed equivalence checks as equivalent=False)")
     print("------------------------------------------------------------------")
     print("Problem-level accuracy")
     print(f"  Any-attempt correct (pass@{int(n_attempts / n_problems)}):           {prob_acc_any:.2%}  ({any_correct}/{n_problems})")
-    print(f"  Majority of attempts correct:           {prob_acc_maj:.2%}  ({maj_correct}/{n_problems})")
+    print(f"  Majority of attempts ({maj_count}/{int(n_attempts / n_problems)}) correct:     {prob_acc_maj:.2%}  ({maj_correct}/{n_problems})")
     print(f"  Selected-attempt correct (lowest ent.): {prob_acc_selected:.2%}  ({selected_correct}/{n_problems})")
     print(f"  Selected attempt had an answer:         {selected_has_answer/n_problems:.2%}  ({selected_has_answer}/{n_problems})")
     print("------------------------------------------------------------------")
