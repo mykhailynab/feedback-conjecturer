@@ -44,7 +44,7 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     lines.append(f"  {'  incomplete (process killed mid-run):':<40} {dim(str(len(incomplete)))}")
     lines.append("")
 
-    _pct = lambda n, d: f"{100*n//max(d,1)}%" if d else "n/a"
+    _pct = lambda n, d: f"{100*n/max(d,1):.2f}%" if d else "n/a"
 
     lines.append(bold("  Proof attempts  ") + dim("(theorem: proposed = gt)"))
     lines.append(hline("─"))
