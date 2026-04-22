@@ -272,7 +272,7 @@ class TestInformalProverResultLogging:
             # Each turn should have expected keys
             for turn in result.turns:
                 assert "turn" in turn
-                assert "thinking" in turn
+                assert "reasoning_content" in turn
                 assert "content" in turn
                 assert "tool_calls" in turn
 

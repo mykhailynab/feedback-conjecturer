@@ -45,6 +45,9 @@ class TIRGenerationConfig:
     # this many tokens.  0 = unlimited.  Use with --continue for progressive
     # budget runs (same semantics as GoedelProverAgent token_limit).
     token_limit: int = 0
+    # Strip thinking/reasoning_content from prior assistant messages before
+    # sending them to the model.  Saves context for models with limited windows.
+    strip_thinking: bool = False
 
 
 @dataclass
@@ -283,9 +286,20 @@ class TIRBackend(ABC):
                 stream_interrupted = False
                 chars_since_recount = 0
 
+                # Optionally strip thinking from prior turns to save context.
+                if cfg.strip_thinking and turn_idx > 0:
+                    chat_messages = [
+                        {k: v for k, v in m.items() if k != "reasoning_content"}
+                        if m.get("role") == "assistant" and "reasoning_content" in m
+                        else m
+                        for m in messages
+                    ]
+                else:
+                    chat_messages = messages
+
                 try:
                     for chunk in self.chat_streaming(
-                        messages, tools, turn_cfg, stop_event=stop_event
+                        chat_messages, tools, turn_cfg, stop_event=stop_event
                     ):
                         if time.time() > deadline:
                             termination_reason = "deadline_exceeded"
@@ -326,7 +340,7 @@ class TIRBackend(ABC):
                             "content": content or None,
                         }
                         if thinking:
-                            partial_assistant_turn["thinking"] = thinking
+                            partial_assistant_turn["reasoning_content"] = thinking
                     break
 
                 if not content and not tool_call_specs:
@@ -365,7 +379,7 @@ class TIRBackend(ABC):
                         ],
                     }
                     if thinking:
-                        assistant_msg["thinking"] = thinking
+                        assistant_msg["reasoning_content"] = thinking
                     messages.append(assistant_msg)
 
                     # Dispatch each tool call.

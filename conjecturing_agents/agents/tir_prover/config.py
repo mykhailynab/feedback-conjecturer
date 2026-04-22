@@ -39,6 +39,9 @@ class TIRProverConfig:
     max_turns: int = 32
     timeout_seconds: float = 600.0
 
+    # Context management
+    strip_thinking: bool = False  # strip CoT from prior turns to save context
+
     # Tools
     use_lean_tool: bool = True    # intermediate lean calls (lean_final is always present)
     use_python_tool: bool = True
@@ -119,6 +122,19 @@ class TIRProverConfig:
             default=d.get("use_python_tool", defs.use_python_tool),
             help="Disable the Python (Jupyter) tool for the TIR prover.",
         )
+        parser.add_argument(
+            f"--{pre}-strip-thinking",
+            dest=f"{dst}_strip_thinking",
+            action="store_true",
+            default=d.get("strip_thinking", defs.strip_thinking),
+            help="Strip reasoning/thinking content from prior turns to save context.",
+        )
+        parser.add_argument(
+            f"--{pre}-no-strip-thinking",
+            dest=f"{dst}_strip_thinking",
+            action="store_false",
+            help="Keep reasoning/thinking content in prior turns (default).",
+        )
 
     @classmethod
     def from_parsed_args(
@@ -141,6 +157,7 @@ class TIRProverConfig:
             "timeout_seconds": getattr(args, f"{dst}_timeout_seconds"),
             "use_lean_tool": getattr(args, f"{dst}_use_lean_tool"),
             "use_python_tool": getattr(args, f"{dst}_use_python_tool"),
+            "strip_thinking": getattr(args, f"{dst}_strip_thinking"),
         }
         kwargs.update(overrides)
         return cls(**kwargs)

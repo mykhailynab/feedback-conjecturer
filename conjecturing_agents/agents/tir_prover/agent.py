@@ -264,6 +264,7 @@ class TIRProverAgent:
             max_turns=self.cfg.max_turns,
             timeout_seconds=self.cfg.timeout_seconds,
             token_limit=token_limit,
+            strip_thinking=self.cfg.strip_thinking,
         )
 
         _log("tir_prover_session_start", {

@@ -183,6 +183,9 @@ class LlamaCppTIRBackend(TIRBackend):
         are accumulated from streaming deltas (index-based) and emitted in a
         final TIRStreamChunk after the stream ends.
 
+        IMPORTANT: Most templates use "reasoning"/"reasoning_content" for the thinking content.
+        This should be the format to follow in messages.
+
         The stop_event is checked between every received chunk.
         """
         client = self._get_client()
@@ -196,6 +199,18 @@ class LlamaCppTIRBackend(TIRBackend):
             "seed": cfg.seed,
         })
         t0 = time.time()
+
+        for m in messages:
+            for k in m.keys():
+                assert k in [
+                    'role',
+                    'content',
+                    'reasoning_content',
+                    'tool_calls',
+                    'tool_call_id',
+                    'name',
+                ], f"Unknown key in messages: {k}"
+                    
 
         if self._verbose:
             print(

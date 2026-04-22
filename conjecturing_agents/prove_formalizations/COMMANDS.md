@@ -7,7 +7,7 @@ Run from `/workspace` with Ollama already serving the model.
 
 ### New commands (actually ran, uncategorized)
 
-only the correctly formalized:
+only the correctly formalized, strip thinking, pass@4:
 ```sh
 screen -dmS prove_formalizations bash -c \
      'source /root/.elan/env && \
@@ -18,6 +18,7 @@ screen -dmS prove_formalizations bash -c \
         --tir-temperature 0.6 \
         --tir-top-p 0.95 \
         --tir-backend llamacpp \
+        --tir-strip-thinking \
         --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
         --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
         --tir-llamacpp-max-concurrent 3 \
@@ -31,9 +32,9 @@ screen -dmS prove_formalizations bash -c \
         --limit-prover-tokens 262144 \
         --continue &> prove_formalizations_tir_llamacpp.log'
 ```
-pass@1:
+pass@1, strip thinking:
 ```sh
-screen -dmS prove_formalizations bash -c \
+screen -dmS prove_formalizations_1 bash -c \
      'source /root/.elan/env && \
       cd /workspace && \
       export PYTHONPATH=. && \
@@ -42,6 +43,7 @@ screen -dmS prove_formalizations bash -c \
         --tir-temperature 0.6 \
         --tir-top-p 0.95 \
         --tir-backend llamacpp \
+        --tir-strip-thinking \
         --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
         --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
         --tir-llamacpp-max-concurrent 3 \
@@ -53,11 +55,70 @@ screen -dmS prove_formalizations bash -c \
         --parallelism 12 \
         --proof-retries 1 \
         --limit-prover-tokens 262144 \
-        --continue &> prove_formalizations_tir_llamacpp.log'
+        --continue &> prove_formalizations_tir_llamacpp_pass1.log'
+```
+pass@1, no strip thinking:
+```sh
+mkdir logs/stripped_formalizations_goedel_pass_1_no_strip
+cp logs/stripped_formalizations_goedel_pass/formalizations.jsonl logs/stripped_formalizations_goedel_pass_1_no_strip
+screen -dmS prove_formalizations_1_strip bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-no-strip-thinking \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/stripped_formalizations_goedel_pass_1_no_strip/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 1 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp_pass1_no_strip.log'
+screen -S monitor_tir_pass_no_strip tail -f prove_formalizations_tir_llamacpp_pass1_no_strip.log
+```
+pass@1, strip thinking, 1M tokens:
+```sh
+mkdir logs/stripped_formalizations_goedel_pass_1_strip_1M
+cp logs/stripped_formalizations_goedel_pass/formalizations.jsonl logs/stripped_formalizations_goedel_pass_1_strip_1M
+screen -dmS prove_formalizations_1 bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-strip-thinking \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/stripped_formalizations_goedel_pass_1_strip_1M/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 1 \
+        --limit-prover-tokens 1048576 \
+        --continue &> prove_formalizations_tir_llamacpp_pass1_strip_1M.log'
+rm prove_formalizations_tir_llamacpp_pass1_strip_1M.log
+screen -S monitor_tir_pass_strip_1M tail -f prove_formalizations_tir_llamacpp_pass1_strip_1M.log
 ```
 
-whole dataset:
+Whole dataset (1 proof attempt per attempt, strip thinking):
 ```sh
+mkdir logs/tir_prover_pass1_all_attempts_strip
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/tir_prover_pass1_all_attempts_strip
 screen -dmS prove_formalizations bash -c \
      'source /root/.elan/env && \
       cd /workspace && \
@@ -67,17 +128,107 @@ screen -dmS prove_formalizations bash -c \
         --tir-temperature 0.6 \
         --tir-top-p 0.95 \
         --tir-backend llamacpp \
+        --tir-strip-thinking \
         --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
         --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
         --tir-llamacpp-max-concurrent 3 \
         --tir-llamacpp-client-timeout 960 \
         --tir-llamacpp-presence-penalty 0.0 \
         --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
-        --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+        --formalizations-path logs/tir_prover_pass1_all_attempts_strip/formalizations.jsonl \
         --lean-project-dir /workspace/mathlib4 \
         --parallelism 12 \
+        --proof-retries 1 \
         --limit-prover-tokens 262144 \
-        --continue &> prove_formalizations_tir_llamacpp.log'
+        --continue &> prove_formalizations_tir_llamacpp_final_strip.log'
+screen -dmS monitor_tir_final_strip tail -f prove_formalizations_tir_llamacpp_final_strip.log
+```
+
+Whole dataset (1 proof attempt per attempt, no strip):
+```sh
+mkdir logs/tir_prover_pass1_all_attempts_no_strip
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/tir_prover_pass1_all_attempts_no_strip
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-no-strip-thinking \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/tir_prover_pass1_all_attempts_no_strip/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 1 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp_final_no_strip.log'
+screen -S monitor_tir_final tail -f prove_formalizations_tir_llamacpp_final_no_strip.log
+```
+
+Whole dataset (1 proof attempt per attempt, strip, 1M):
+```sh
+mkdir logs/tir_prover_pass1_all_attempts_strip_1M
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/tir_prover_pass1_all_attempts_strip_1M
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-strip-thinking \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/tir_prover_pass1_all_attempts_strip_1M/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 1 \
+        --limit-prover-tokens 1048576 \
+        --continue &> prove_formalizations_tir_llamacpp_final_strip_1M.log'
+screen -dmS monitor_tir_final tail -f prove_formalizations_tir_llamacpp_final_strip_1M.log
+```
+
+Whole dataset (4 proof attempt per attempt, strip thinking):
+```sh
+mkdir logs/tir_prover_pass4_all_attempts_strip
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/tir_prover_pass4_all_attempts_strip
+screen -dmS prove_formalizations_pass4 bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-strip-thinking \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/tir_prover_pass4_all_attempts_strip/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --proof-retries 4 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp_final_pass4_strip.log'
+screen -dmS monitor_tir_final_pass4_strip tail -f prove_formalizations_tir_llamacpp_final_pass4_strip.log
 ```
 
 
