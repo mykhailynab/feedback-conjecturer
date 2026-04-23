@@ -205,6 +205,10 @@ def bucketize_entropy(entropy: float, bins: List[float]) -> str:
     return f"> {bins[-1]:g}" if bins else "all"
 
 
+def fix_has_answer(df):
+    return df
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", type=str, default=".", help="Directory containing attempts.jsonl and solutions.csv")
@@ -229,6 +233,8 @@ def main():
     if df_attempts.empty:
         print("No attempt records found.")
         return
+
+    df_attempts = fix_has_answer(df_attempts)
 
     truth_map = extract_truth_map_from_solutions(df_solutions)
 
@@ -294,7 +300,7 @@ def main():
     term_counts = Counter(df_attempts["termination_reason"].fillna("").astype(str).tolist())
     term_counts_has_answer = Counter(df_attempts["termination_reason"][df_attempts["has_answer"]].fillna("").astype(str).tolist())
     print(term_counts_has_answer)
-    print(df_attempts[df_attempts["has_answer"] & (df_attempts["termination_reason"] != "boxed_detected_in_stream")]["attempt_answer"].iloc[0])
+    print(df_attempts[df_attempts["has_answer"] & (df_attempts["termination_reason"] != "boxed_detected_in_stream")]["attempt_answer"].isna().iloc[0])
     print(df_attempts[~df_attempts["has_answer"]]["attempt_answer"].iloc[0])
     print((~df_attempts["has_answer"]).sum())
     print((df_attempts["termination_reason"] != "boxed_detected_in_stream").sum())
