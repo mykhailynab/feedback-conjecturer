@@ -18,7 +18,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
@@ -26,92 +25,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer
 
+from analysis_and_inspection.for_paper.tokenize_utils import (
+    aggregate_per_problem,
+    goedel_session_tokens,
+    load_proved_status,
+    tir_session_tokens,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 PLOTS = ROOT / "plots"
 PLOTS.mkdir(exist_ok=True)
 
 GOEDEL_COLORS = ["#ED7D31", "#C55A11", "#A04000", "#7F3300"]
 TIR_COLORS = ["#5B9BD5", "#2E75B6", "#1F4E79", "#0D3B66"]
-
-
-def goedel_session_tokens(results_path: Path, tokenizer) -> dict[tuple[str, int], int]:
-    """
-    For each (problem_id, attempt), tokenize the last round's prompt + output.
-
-    The prompt field already contains the fully-rendered chat template, so we
-    tokenize it as raw text (add_special_tokens=False).  The peak context usage
-    of a session is the last round, which includes all prior rounds' content.
-    """
-    result = {}
-    with results_path.open() as f:
-        for line in f:
-            if not line.strip():
-                continue
-            d = json.loads(line)
-            pid, att = d["problem_id"], d["attempt"]
-            pr = d.get("proof_result")
-            if not pr:
-                continue
-            rounds = pr.get("rounds") or []
-            if not rounds:
-                continue
-            last = rounds[-1]
-            prompt = last.get("prompt", "") or ""
-            output = last.get("raw_output", "") or ""
-            text = prompt + output
-            tokens = len(tokenizer.encode(text, add_special_tokens=False))
-            result[(pid, att)] = tokens
-    return result
-
-
-def tir_session_tokens(results_path: Path, tokenizer) -> dict[tuple[str, int], int]:
-    """
-    For each (problem_id, attempt), sum all conversation text and tokenize.
-
-    TIR sessions record turns with thinking, content, and tool_calls (each with
-    arguments and result).  We concatenate all text and tokenize.  The proved_lean
-    field contains the initial theorem (system/user prompt content).
-    """
-    result = {}
-    with results_path.open() as f:
-        for line in f:
-            if not line.strip():
-                continue
-            d = json.loads(line)
-            pid, att = d["problem_id"], d["attempt"]
-            pr = d.get("proof_result")
-            if not pr:
-                continue
-            turns = pr.get("turns") or []
-            if not turns:
-                continue
-            # Start with the input theorem (user prompt)
-            parts = [d.get("proved_lean", "") or ""]
-            for t in turns:
-                parts.append(t.get("thinking", "") or "")
-                parts.append(t.get("content", "") or "")
-                for tc in t.get("tool_calls", []):
-                    args = tc.get("arguments", {})
-                    if isinstance(args, dict):
-                        parts.append(json.dumps(args))
-                    else:
-                        parts.append(str(args))
-                    parts.append(tc.get("result", "") or "")
-            text = "\n".join(parts)
-            tokens = len(tokenizer.encode(text, add_special_tokens=False))
-            result[(pid, att)] = tokens
-    return result
-
-
-def load_proved_status(path: Path) -> dict[tuple[str, int], bool]:
-    results = {}
-    with path.open() as f:
-        for line in f:
-            if not line.strip():
-                continue
-            d = json.loads(line)
-            results[(d["problem_id"], d["attempt"])] = bool(d.get("proved"))
-    return results
 
 
 def build_curve(
@@ -122,6 +48,18 @@ def build_curve(
     proved_tokens = sorted(
         tokens_map[k] for k, v in proved_map.items() if v and k in tokens_map
     )
+    if not proved_tokens:
+        return [0], [0]
+    xs = [0] + proved_tokens
+    ys = list(range(len(xs)))
+    return xs, ys
+
+
+def build_curve_from_aggregated(
+    agg: dict[str, tuple[bool, int]],
+) -> tuple[list[int], list[int]]:
+    """x = token budget, y = cumulative problems proved within that budget."""
+    proved_tokens = sorted(toks for solved, toks in agg.values() if solved)
     if not proved_tokens:
         return [0], [0]
     xs = [0] + proved_tokens
@@ -150,6 +88,11 @@ def parse_args() -> argparse.Namespace:
         "--tir-tokenizer", type=str,
         default=str(ROOT / "tokenizers" / "Qwen3.6-35B-A3B"),
         help="Path to the TIR/Qwen HF tokenizer (default: tokenizers/Qwen3.6-35B-A3B).",
+    )
+    p.add_argument(
+        "--aggregate-problems", action="store_true",
+        help="Aggregate retries per problem (best successful token count). "
+             "Curve shows problems solved instead of attempts solved.",
     )
     p.add_argument(
         "--output", type=str, default=str(PLOTS / "tokens_vs_solved.pdf"),
@@ -199,35 +142,45 @@ def main():
 
     for i, (path_str, title) in enumerate(args.goedel):
         results_path = Path(path_str)
-        print(f"Computing Goedel session tokens for '{title}'...")
-        tokens = goedel_session_tokens(results_path, goedel_tok)
         proved = load_proved_status(results_path)
-        n_proved = sum(1 for k, v in proved.items() if v and k in tokens)
-        print(f"  {len(tokens)} sessions tokenized, {n_proved} proved with token data")
-
-        xs, ys = build_curve(tokens, proved)
-        print(f"  max tokens: {max(xs)}")
+        if args.aggregate_problems:
+            # Need all attempts for per-problem aggregation
+            print(f"Computing Goedel session tokens for '{title}' ({len(proved)} attempts)...")
+            tokens = goedel_session_tokens(results_path, goedel_tok)
+            agg = aggregate_per_problem(tokens, proved)
+            xs, ys = build_curve_from_aggregated(agg)
+        else:
+            proved_keys = {k for k, v in proved.items() if v}
+            print(f"Computing Goedel session tokens for '{title}' ({len(proved_keys)} proved attempts)...")
+            tokens = goedel_session_tokens(results_path, goedel_tok, keys=proved_keys)
+            xs, ys = build_curve(tokens, proved)
+        print(f"  {ys[-1]} proved, max tokens: {max(xs)}")
         color = GOEDEL_COLORS[i % len(GOEDEL_COLORS)]
         ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=1.5)
         ax.scatter(xs, ys, color=color)
 
     for i, (path_str, title) in enumerate(args.tir):
         results_path = Path(path_str)
-        print(f"Computing TIR session tokens for '{title}'...")
-        tokens = tir_session_tokens(results_path, qwen_tok)
         proved = load_proved_status(results_path)
-        n_proved = sum(1 for k, v in proved.items() if v and k in tokens)
-        print(f"  {len(tokens)} sessions tokenized, {n_proved} proved with token data")
-
-        xs, ys = build_curve(tokens, proved)
-        print(f"  max tokens: {max(xs)}")
+        if args.aggregate_problems:
+            print(f"Computing TIR session tokens for '{title}' ({len(proved)} attempts)...")
+            tokens = tir_session_tokens(results_path, qwen_tok)
+            agg = aggregate_per_problem(tokens, proved)
+            xs, ys = build_curve_from_aggregated(agg)
+        else:
+            proved_keys = {k for k, v in proved.items() if v}
+            print(f"Computing TIR session tokens for '{title}' ({len(proved_keys)} proved attempts)...")
+            tokens = tir_session_tokens(results_path, qwen_tok, keys=proved_keys)
+            xs, ys = build_curve(tokens, proved)
+        print(f"  {ys[-1]} proved, max tokens: {max(xs)}")
         color = TIR_COLORS[i % len(TIR_COLORS)]
         ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=1.5)
         ax.scatter(xs, ys, color=color)
 
     ax.set_xlabel("Token budget (tokens used)")
-    ax.set_ylabel("Attempts proved")
-    ax.set_title("Proved attempts vs token budget")
+    unit = "Problems" if args.aggregate_problems else "Attempts"
+    ax.set_ylabel(f"{unit} proved")
+    ax.set_title(f"Proved {unit.lower()} vs token budget")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
