@@ -54,13 +54,6 @@ def safe_int(x: Any) -> Optional[int]:
         return None
 
 
-def is_nonempty_answer(ans: Any) -> bool:
-    if ans is None:
-        return False
-    s = str(ans).strip()
-    return s != "" and s.lower() != "none"
-
-
 def json_loads_maybe(s: Any) -> Any:
     if s is None:
         return None
@@ -129,7 +122,7 @@ def load_attempts_jsonl(path: Path) -> pd.DataFrame:
 
     # basic cleanup
     df["id"] = df["id"].astype(str)
-    df["has_answer"] = df["attempt_answer"].apply(is_nonempty_answer)
+    df["has_answer"] = df["attempt_answer"].str.len() > 0
     return df
 
 
@@ -205,10 +198,6 @@ def bucketize_entropy(entropy: float, bins: List[float]) -> str:
     return f"> {bins[-1]:g}" if bins else "all"
 
 
-def fix_has_answer(df):
-    return df
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", type=str, default=".", help="Directory containing attempts.jsonl and solutions.csv")
@@ -233,8 +222,6 @@ def main():
     if df_attempts.empty:
         print("No attempt records found.")
         return
-
-    df_attempts = fix_has_answer(df_attempts)
 
     truth_map = extract_truth_map_from_solutions(df_solutions)
 
@@ -299,12 +286,7 @@ def main():
 
     term_counts = Counter(df_attempts["termination_reason"].fillna("").astype(str).tolist())
     term_counts_has_answer = Counter(df_attempts["termination_reason"][df_attempts["has_answer"]].fillna("").astype(str).tolist())
-    print(term_counts_has_answer)
-    print(df_attempts[df_attempts["has_answer"] & (df_attempts["termination_reason"] != "boxed_detected_in_stream")]["attempt_answer"].isna().iloc[0])
-    print(df_attempts[~df_attempts["has_answer"]]["attempt_answer"].iloc[0])
-    print((~df_attempts["has_answer"]).sum())
-    print((df_attempts["termination_reason"] != "boxed_detected_in_stream").sum())
-    raise SystemExit(0)
+    term_counts_no_answer = Counter(df_attempts["termination_reason"][~df_attempts["has_answer"]].fillna("").astype(str).tolist())
     py_calls = int(df_attempts["python_calls"].sum())
     py_errs = int(df_attempts["python_errors"].sum())
     py_err_rate = (py_errs / py_calls) if py_calls else float("nan")
@@ -337,7 +319,7 @@ def main():
     print(f"  Answer rate:                       {answer_rate:.2%}  ({n_answered}/{n_attempts})")
     print(f"  w/ equiv. result (among answered): {n_with_truth/n_answered:.2%}  ({n_with_truth}/{n_answered}) (here, answer equivalence checker produced an output)")
     print(f"  Accuracy (among w/ equiv. result): {n_correct/n_with_truth:.2%}  ({n_correct}/{n_with_truth})")
-    print(f"  Accuracy:                          {n_correct/n_answered:.2%}  ({n_correct}/{n_answered}) (if we treat failed equivalence checks as equivalent=False)")
+    print(f"  Accuracy (among answered):         {n_correct/n_answered:.2%}  ({n_correct}/{n_answered}) (if we treat failed equivalence checks as equivalent=False)")
     print("------------------------------------------------------------------")
     print("Problem-level accuracy")
     print(f"  Any-attempt correct (pass@{int(n_attempts / n_problems)}):           {prob_acc_any:.2%}  ({any_correct}/{n_problems})")
@@ -366,8 +348,14 @@ def main():
     print(f"  python_errors: {py_errs}")
     print(f"  python_error_rate (errs/calls): {py_err_rate:.4f}" if py_calls else "  python_error_rate: n/a (no calls)")
     print("------------------------------------------------------------------")
-    print("Termination reasons (top)")
+    print(f"Termination reasons (top {args.topk_termination})")
     for reason, cnt in term_counts.most_common(args.topk_termination):
+        print(f"  {cnt:7d}  {reason}")
+    print(f"Termination reasons (top {args.topk_termination}, w/answer)")
+    for reason, cnt in term_counts_has_answer.most_common(args.topk_termination):
+        print(f"  {cnt:7d}  {reason}")
+    print(f"Termination reasons (top {args.topk_termination}, no answer)")
+    for reason, cnt in term_counts_no_answer.most_common(args.topk_termination):
         print(f"  {cnt:7d}  {reason}")
 
     print("------------------------------------------------------------------")
