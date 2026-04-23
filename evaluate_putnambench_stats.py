@@ -292,6 +292,13 @@ def main():
     ms_all = [x for x in ms_all if x is not None]
 
     term_counts = Counter(df_attempts["termination_reason"].fillna("").astype(str).tolist())
+    term_counts_has_answer = Counter(df_attempts["termination_reason"][df_attempts["has_answer"]].fillna("").astype(str).tolist())
+    print(term_counts_has_answer)
+    print(df_attempts[df_attempts["has_answer"] & (df_attempts["termination_reason"] != "boxed_detected_in_stream")]["attempt_answer"].iloc[0])
+    print(df_attempts[~df_attempts["has_answer"]]["attempt_answer"].iloc[0])
+    print((~df_attempts["has_answer"]).sum())
+    print((df_attempts["termination_reason"] != "boxed_detected_in_stream").sum())
+    raise SystemExit(0)
     py_calls = int(df_attempts["python_calls"].sum())
     py_errs = int(df_attempts["python_errors"].sum())
     py_err_rate = (py_errs / py_calls) if py_calls else float("nan")
