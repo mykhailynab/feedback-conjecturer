@@ -51,6 +51,11 @@ def compute_stats(attempts: list[dict]) -> dict:
     py_calls = [a.get("python_calls", 0) or 0 for a in attempts]
     py_errors = [a.get("python_errors", 0) or 0 for a in attempts]
     resp_lens = [a.get("response_length", 0) or 0 for a in attempts]
+    context_lens = [
+        len(a.get("trace", {}).get("full_conversation_token_ids", []))
+        if a["termination_reason"] != "context_exhausted" else 65536  # NOTE: this is specific to our gpt-pss:120B solver. Fix this
+        for a in attempts
+    ]
     # turns = number of tool calls + 1 (final assistant message)
     turns = []
     for a in attempts:
@@ -88,6 +93,10 @@ def compute_stats(attempts: list[dict]) -> dict:
         "resp_max": max(resp_lens),
         "resp_mean": statistics.mean(resp_lens),
         "resp_median": statistics.median(resp_lens),
+        "context_min": min(context_lens),
+        "context_max": max(context_lens),
+        "context_mean": statistics.mean(context_lens),
+        "context_median": statistics.median(context_lens),
         "turns": turns,
         "turns_min": min(turns),
         "turns_mean": statistics.mean(turns),
@@ -121,6 +130,10 @@ def main():
     print(f"| Turns / session (mean) | {s5['turns_mean']:.1f} | {s20['turns_mean']:.1f} |")
     print(f"| Turns / session (median) | {s5['turns_median']:.0f} | {s20['turns_median']:.0f} |")
     print(f"| Turns / session (max) | {s5['turns_max']:.1f} | {s20['turns_max']:.1f} |")
+    print(f"| Context tokens used — min | {s5['context_min']:,} | {s20['context_min']:,} |")
+    print(f"| Context tokens used — median | {s5['context_median']:,.0f} | {s20['context_median']:,.0f} |")
+    print(f"| Context tokens used — mean | {s5['context_mean']:,.0f} | {s20['context_mean']:,.0f} |")
+    print(f"| Context tokens used — max | {s5['context_max']:,} | {s20['context_max']:,} |")
     print(f"| Response tokens used — min | {s5['resp_min']:,} | {s20['resp_min']:,} |")
     print(f"| Response tokens used — median | {s5['resp_median']:,.0f} | {s20['resp_median']:,.0f} |")
     print(f"| Response tokens used — mean | {s5['resp_mean']:,.0f} | {s20['resp_mean']:,.0f} |")
