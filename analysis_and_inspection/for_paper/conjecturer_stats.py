@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
 Generate tables and plots for the conjecturer results.
-  - Consolidated accuracy / tool-usage / context table (5min vs 20min)
+  - Consolidated accuracy / tool-usage / context table
   - Termination reasons grouped bar chart
   - Turns-per-session histogram
 
 Usage:
     PYTHONPATH=. python analysis_and_inspection/for_paper/conjecturer_stats.py
+    PYTHONPATH=. python analysis_and_inspection/for_paper/conjecturer_stats.py \
+        --run logs/my_run "My Run"
 """
 
 from __future__ import annotations
 
+import argparse
+import csv
 import json
 import statistics
 from collections import Counter
@@ -21,23 +25,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
-# ── paths ──────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parents[2]
-LOGS_20 = ROOT / "logs" / "putnam_120b_tir_pass4_20min"
-LOGS_5 = ROOT / "logs" / "putnam_120b_tir_pass4"
 PLOTS = ROOT / "plots"
 PLOTS.mkdir(exist_ok=True)
 
 
 # ── helpers ────────────────────────────────────────────────────
 
-def load_attempts(log_dir: Path) -> list[dict]:
-    # Try both id field names
-    fname = "attempts.jsonl"
-    if (log_dir / "attempts_fixed.jsonl").exists():
-        fname = "attempts_fixed.jsonl"
+def load_attempts(log_dir: Path, attempts_file: str | None = None) -> list[dict]:
+    if attempts_file:
+        path = log_dir / attempts_file
+    elif (log_dir / "attempts_fixed.jsonl").exists():
+        path = log_dir / "attempts_fixed.jsonl"
+    else:
+        path = log_dir / "attempts.jsonl"
     rows = []
-    with (log_dir / fname).open() as f:
+    with path.open() as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -46,8 +49,48 @@ def load_attempts(log_dir: Path) -> list[dict]:
     return rows
 
 
+def load_correctness(
+    log_dir: Path, solutions_file: str | None = None,
+) -> dict[tuple[str, int], bool]:
+    """
+    Load per-attempt correctness from the solutions CSV.
+
+    Returns {(problem_id, attempt): is_correct}.
+    """
+    if solutions_file:
+        path = log_dir / solutions_file
+    elif (log_dir / "solutions_fixed.csv").exists():
+        path = log_dir / "solutions_fixed.csv"
+    else:
+        path = log_dir / "solutions.csv"
+    result = {}
+    with path.open() as f:
+        for row in csv.DictReader(f):
+            pid = row["id"]
+            cs = row.get("checker_summary", "")
+            if not cs:
+                continue
+            parsed = json.loads(cs)
+            per_attempt = parsed.get("per_attempt_truth", {})
+            for att_str, info in per_attempt.items():
+                result[(pid, int(att_str))] = bool(info.get("is_correct"))
+    return result
+
+
 def compute_stats(attempts: list[dict]) -> dict:
     n = len(attempts)
+    if n == 0:
+        return {
+            "n": 0,
+            "total_py_calls": 0, "total_py_errors": 0, "py_error_rate": 0,
+            "calls_per_session_min": 0, "calls_per_session_mean": 0,
+            "calls_per_session_median": 0, "calls_per_session_max": 0,
+            "answer_count": 0, "answer_rate": 0,
+            "resp_min": 0, "resp_max": 0, "resp_mean": 0, "resp_median": 0,
+            "context_min": 0, "context_max": 0, "context_mean": 0, "context_median": 0,
+            "turns": [], "turns_min": 0, "turns_mean": 0, "turns_median": 0, "turns_max": 0,
+            "term_counts": Counter(),
+        }
     py_calls = [a.get("python_calls", 0) or 0 for a in attempts]
     py_errors = [a.get("python_errors", 0) or 0 for a in attempts]
     resp_lens = [a.get("response_length", 0) or 0 for a in attempts]
@@ -106,97 +149,187 @@ def compute_stats(attempts: list[dict]) -> dict:
     }
 
 
+def split_by_correctness(
+    attempts: list[dict],
+    correctness: dict[tuple[str, int], bool],
+) -> tuple[list[dict], list[dict]]:
+    """Split attempts into (correct, incorrect) based on the solutions CSV."""
+    correct, incorrect = [], []
+    for a in attempts:
+        pid = a.get("id") or a.get("problem_id")
+        att = a.get("attempt")
+        if pid is None or att is None:
+            incorrect.append(a)
+            continue
+        is_correct = correctness.get((str(pid), int(att)))
+        if is_correct:
+            correct.append(a)
+        else:
+            incorrect.append(a)
+    return correct, incorrect
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Generate tables and plots for conjecturer results.",
+    )
+    p.add_argument(
+        "--run", nargs=2, action="append", metavar=("LOG_DIR", "LABEL"),
+        help="Run: log directory and display label. Repeatable. "
+             "Order matters for table column ordering.",
+    )
+    p.add_argument(
+        "--attempts-file", type=str, default=None,
+        help="Override attempts filename (default: attempts_fixed.jsonl if present, else attempts.jsonl).",
+    )
+    p.add_argument(
+        "--solutions-file", type=str, default=None,
+        help="Override solutions filename (default: solutions_fixed.csv if present, else solutions.csv).",
+    )
+    p.add_argument(
+        "--output-dir", type=str, default=str(PLOTS),
+        help="Directory for output plots (default: plots/).",
+    )
+    args = p.parse_args()
+
+    if args.run is None:
+        args.run = [
+            [str(ROOT / "logs" / "putnam_120b_tir_pass4"), "5 min"],
+            [str(ROOT / "logs" / "putnam_120b_tir_pass4_20min"), "20 min"],
+        ]
+
+    return args
+
+
 # ── main ───────────────────────────────────────────────────────
 
 def main():
-    att_20 = load_attempts(LOGS_20)
-    att_5 = load_attempts(LOGS_5)
-    s20 = compute_stats(att_20)
-    s5 = compute_stats(att_5)
+    args = parse_args()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load all runs: for each run, compute stats for all / correct / incorrect
+    # runs stores (label, all_stats) for charts; columns stores all 3×N stat dicts for the table
+    runs: list[tuple[str, dict]] = []
+    columns: list[tuple[str, dict]] = []  # (column_header, stats)
+    for log_dir_str, label in args.run:
+        log_dir = Path(log_dir_str)
+        attempts = load_attempts(log_dir, args.attempts_file)
+        correctness = load_correctness(log_dir, args.solutions_file)
+        correct_att, incorrect_att = split_by_correctness(attempts, correctness)
+
+        s_all = compute_stats(attempts)
+        s_correct = compute_stats(correct_att)
+        s_incorrect = compute_stats(incorrect_att)
+
+        runs.append((label, s_all))
+        columns.append((label, s_all))
+        columns.append((f"{label} (+)", s_correct))
+        columns.append((f"{label} (-)", s_incorrect))
+
+    labels = [label for label, _ in runs]
 
     # ── 1) Print consolidated table (markdown) ─────────────────
-    print("\n### Consolidated solver agent stats (5 min vs 20 min)\n")
-    print("| Metric | 5 min | 20 min |")
-    print("|--------|------:|-------:|")
-    print(f"| Python tool calls (total) | {s5['total_py_calls']:,} | {s20['total_py_calls']:,} |")
-    print(f"| Python tool errors (total) | {s5['total_py_errors']:,} | {s20['total_py_errors']:,} |")
-    print(f"| Error rate | {s5['py_error_rate']:.2%} | {s20['py_error_rate']:.2%} |")
-    print(f"| Calls / session (min) | {s5['calls_per_session_min']:.1f} | {s20['calls_per_session_min']:.1f} |")
-    print(f"| Calls / session (mean) | {s5['calls_per_session_mean']:.1f} | {s20['calls_per_session_mean']:.1f} |")
-    print(f"| Calls / session (median) | {s5['calls_per_session_median']:.1f} | {s20['calls_per_session_median']:.1f} |")
-    print(f"| Calls / session (max) | {s5['calls_per_session_max']:.1f} | {s20['calls_per_session_max']:.1f} |")
-    print(f"| Sessions with answer | {s5['answer_count']}/{s5['n']} ({s5['answer_rate']:.2%}) | {s20['answer_count']}/{s20['n']} ({s20['answer_rate']:.2%}) |")
-    print(f"| Turns / session (min) | {s5['turns_min']:.1f} | {s20['turns_min']:.1f} |")
-    print(f"| Turns / session (mean) | {s5['turns_mean']:.1f} | {s20['turns_mean']:.1f} |")
-    print(f"| Turns / session (median) | {s5['turns_median']:.0f} | {s20['turns_median']:.0f} |")
-    print(f"| Turns / session (max) | {s5['turns_max']:.1f} | {s20['turns_max']:.1f} |")
-    print(f"| Context tokens used — min | {s5['context_min']:,} | {s20['context_min']:,} |")
-    print(f"| Context tokens used — median | {s5['context_median']:,.0f} | {s20['context_median']:,.0f} |")
-    print(f"| Context tokens used — mean | {s5['context_mean']:,.0f} | {s20['context_mean']:,.0f} |")
-    print(f"| Context tokens used — max | {s5['context_max']:,} | {s20['context_max']:,} |")
-    print(f"| Response tokens used — min | {s5['resp_min']:,} | {s20['resp_min']:,} |")
-    print(f"| Response tokens used — median | {s5['resp_median']:,.0f} | {s20['resp_median']:,.0f} |")
-    print(f"| Response tokens used — mean | {s5['resp_mean']:,.0f} | {s20['resp_mean']:,.0f} |")
-    print(f"| Response tokens used — max | {s5['resp_max']:,} | {s20['resp_max']:,} |")
+    col_headers = [h for h, _ in columns]
+    col_stats = [s for _, s in columns]
+    hdr = " | ".join(col_headers)
+    sep = " | ".join("------:" for _ in col_headers)
+    print(f"\n### Consolidated solver agent stats ({' vs '.join(labels)})\n")
+    print(f"| Metric | {hdr} |")
+    print(f"|--------|{sep}|")
+
+    def row(name: str, key: str, fmt: str = ","):
+        vals = " | ".join(
+            f"{s[key]:{fmt}}" if s["n"] else "—" for s in col_stats
+        )
+        print(f"| {name} | {vals} |")
+
+    def row_frac(name: str, num_key: str, den_key: str):
+        vals = " | ".join(
+            f"{s[num_key]}/{s[den_key]} ({s[num_key]/s[den_key]:.2%})" if s[den_key] else "—"
+            for s in col_stats
+        )
+        print(f"| {name} | {vals} |")
+
+    row("N (attempts)", "n")
+    row("Python tool calls (total)", "total_py_calls")
+    row("Python tool errors (total)", "total_py_errors")
+    row("Error rate", "py_error_rate", ".2%")
+    row("Calls / session (min)", "calls_per_session_min", ".1f")
+    row("Calls / session (mean)", "calls_per_session_mean", ".1f")
+    row("Calls / session (median)", "calls_per_session_median", ".1f")
+    row("Calls / session (max)", "calls_per_session_max", ".1f")
+    row_frac("Sessions with answer", "answer_count", "n")
+    row("Turns / session (min)", "turns_min", ".1f")
+    row("Turns / session (mean)", "turns_mean", ".1f")
+    row("Turns / session (median)", "turns_median", ".0f")
+    row("Turns / session (max)", "turns_max", ".1f")
+    row("Context tokens used — min", "context_min")
+    row("Context tokens used — median", "context_median", ",.0f")
+    row("Context tokens used — mean", "context_mean", ",.0f")
+    row("Context tokens used — max", "context_max")
+    row("Response tokens used — min", "resp_min")
+    row("Response tokens used — median", "resp_median", ",.0f")
+    row("Response tokens used — mean", "resp_mean", ",.0f")
+    row("Response tokens used — max", "resp_max")
 
     # ── 2) Termination reasons bar chart ───────────────────────
-    # Normalize reason labels
     def simplify_reason(r: str) -> str:
         if r.startswith("exception:HarmonyError"):
             return "HarmonyError"
         return r
 
-    tc5 = Counter()
-    for r, c in s5["term_counts"].items():
-        tc5[simplify_reason(r)] += c
-    tc20 = Counter()
-    for r, c in s20["term_counts"].items():
-        tc20[simplify_reason(r)] += c
+    term_counters = []
+    for _, s in runs:
+        tc = Counter()
+        for r, c in s["term_counts"].items():
+            tc[simplify_reason(r)] += c
+        term_counters.append(tc)
 
     all_reasons = sorted(
-        set(tc5.keys()) | set(tc20.keys()),
-        key=lambda r: -(tc5.get(r, 0) + tc20.get(r, 0)),
+        set().union(*(tc.keys() for tc in term_counters)),
+        key=lambda r: -sum(tc.get(r, 0) for tc in term_counters),
     )
 
+    n_runs = len(runs)
+    colors = ["#5B9BD5", "#ED7D31", "#70AD47", "#FFC000", "#9B59B6", "#E74C3C"]
     fig, ax = plt.subplots(figsize=(10, 4))
     x = range(len(all_reasons))
-    w = 0.38
-    bars5 = [tc5.get(r, 0) for r in all_reasons]
-    bars20 = [tc20.get(r, 0) for r in all_reasons]
-    ax.bar([i - w / 2 for i in x], bars5, w, label="5 min", color="#5B9BD5")
-    ax.bar([i + w / 2 for i in x], bars20, w, label="20 min", color="#ED7D31")
+    w = 0.8 / n_runs
+    for i, ((label, _), tc) in enumerate(zip(runs, term_counters)):
+        offset = (i - (n_runs - 1) / 2) * w
+        bars = [tc.get(r, 0) for r in all_reasons]
+        ax.bar([j + offset for j in x], bars, w, label=label, color=colors[i % len(colors)])
     ax.set_xticks(list(x))
-    # wrap long labels
     wrapped = [r.replace("_", "\n") for r in all_reasons]
     ax.set_xticklabels(wrapped, fontsize=8, rotation=30, ha="right")
     ax.set_ylabel("Count")
-    ax.set_title("Termination reasons (5 min vs 20 min)")
+    ax.set_title(f"Termination reasons ({' vs '.join(labels)})")
     ax.legend()
     ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     fig.tight_layout()
-    path = PLOTS / "termination_reasons.pdf"
+    path = output_dir / "termination_reasons.pdf"
     fig.savefig(path)
     plt.close(fig)
     print(f"\nSaved: {path}")
 
     # ── 3) Turns-per-session bar chart ─────────────────────────
     fig, ax = plt.subplots(figsize=(10, 3.5))
-    w = 0.45
-    counts = Counter(s5["turns"])
-    xs = sorted(counts.keys())
-    ys = [counts[k] for k in xs]
-    ax.bar([x - w / 2 for x in xs], ys, w, color="#5B9BD5", label="5 min")
-    counts = Counter(s20["turns"])
-    xs = sorted(counts.keys())
-    ys = [counts[k] for k in xs]
-    ax.bar([x + w / 2 for x in xs], ys, w, color="#ED7D31", label="20 min")
+    w = 0.8 / n_runs
+    for i, ((label, _), (_, s)) in enumerate(zip(runs, runs)):
+        offset = (i - (n_runs - 1) / 2) * w
+        counts = Counter(s["turns"])
+        xs = sorted(counts.keys())
+        ys = [counts[k] for k in xs]
+        ax.bar([xv + offset for xv in xs], ys, w, color=colors[i % len(colors)], label=label)
     ax.set_xlabel("Turns per session")
     ax.set_ylabel("Number of sessions")
-    ax.set_title(f"Turns per session")
+    ax.set_title("Turns per session")
     ax.set_yscale('log')
+    ax.legend()
     ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     fig.tight_layout()
-    path = PLOTS / "turns_per_session.pdf"
+    path = output_dir / "turns_per_session.pdf"
     fig.savefig(path)
     plt.close(fig)
     print(f"Saved: {path}")
