@@ -66,7 +66,7 @@ def compute_stats(attempts: list[dict]) -> dict:
     has_answer = sum(
         1 for a in attempts
         if a.get("attempt_answer") is not None
-        and str(a.get("attempt_answer", "")).strip() not in ("", "None")
+        and len(a.get("attempt_answer", "")) > 0
     )
 
     term_counts = Counter(
@@ -78,17 +78,21 @@ def compute_stats(attempts: list[dict]) -> dict:
         "total_py_calls": total_calls,
         "total_py_errors": total_errors,
         "py_error_rate": total_errors / total_calls if total_calls else 0,
+        "calls_per_session_min": min(py_calls),
         "calls_per_session_mean": statistics.mean(py_calls),
         "calls_per_session_median": statistics.median(py_calls),
+        "calls_per_session_max": max(py_calls),
         "answer_count": has_answer,
         "answer_rate": has_answer / n if n else 0,
-        "context_min": min(resp_lens),
-        "context_max": max(resp_lens),
-        "context_mean": statistics.mean(resp_lens),
-        "context_median": statistics.median(resp_lens),
+        "resp_min": min(resp_lens),
+        "resp_max": max(resp_lens),
+        "resp_mean": statistics.mean(resp_lens),
+        "resp_median": statistics.median(resp_lens),
         "turns": turns,
+        "turns_min": min(turns),
         "turns_mean": statistics.mean(turns),
         "turns_median": statistics.median(turns),
+        "turns_max": max(turns),
         "term_counts": term_counts,
     }
 
@@ -108,15 +112,19 @@ def main():
     print(f"| Python tool calls (total) | {s5['total_py_calls']:,} | {s20['total_py_calls']:,} |")
     print(f"| Python tool errors (total) | {s5['total_py_errors']:,} | {s20['total_py_errors']:,} |")
     print(f"| Error rate | {s5['py_error_rate']:.2%} | {s20['py_error_rate']:.2%} |")
+    print(f"| Calls / session (min) | {s5['calls_per_session_min']:.1f} | {s20['calls_per_session_min']:.1f} |")
     print(f"| Calls / session (mean) | {s5['calls_per_session_mean']:.1f} | {s20['calls_per_session_mean']:.1f} |")
     print(f"| Calls / session (median) | {s5['calls_per_session_median']:.1f} | {s20['calls_per_session_median']:.1f} |")
+    print(f"| Calls / session (max) | {s5['calls_per_session_max']:.1f} | {s20['calls_per_session_max']:.1f} |")
     print(f"| Sessions with answer | {s5['answer_count']}/{s5['n']} ({s5['answer_rate']:.2%}) | {s20['answer_count']}/{s20['n']} ({s20['answer_rate']:.2%}) |")
+    print(f"| Turns / session (min) | {s5['turns_min']:.1f} | {s20['turns_min']:.1f} |")
     print(f"| Turns / session (mean) | {s5['turns_mean']:.1f} | {s20['turns_mean']:.1f} |")
     print(f"| Turns / session (median) | {s5['turns_median']:.0f} | {s20['turns_median']:.0f} |")
-    print(f"| Context used — min | {s5['context_min']:,} | {s20['context_min']:,} |")
-    print(f"| Context used — median | {s5['context_median']:,.0f} | {s20['context_median']:,.0f} |")
-    print(f"| Context used — mean | {s5['context_mean']:,.0f} | {s20['context_mean']:,.0f} |")
-    print(f"| Context used — max | {s5['context_max']:,} | {s20['context_max']:,} |")
+    print(f"| Turns / session (max) | {s5['turns_max']:.1f} | {s20['turns_max']:.1f} |")
+    print(f"| Response tokens used — min | {s5['resp_min']:,} | {s20['resp_min']:,} |")
+    print(f"| Response tokens used — median | {s5['resp_median']:,.0f} | {s20['resp_median']:,.0f} |")
+    print(f"| Response tokens used — mean | {s5['resp_mean']:,.0f} | {s20['resp_mean']:,.0f} |")
+    print(f"| Response tokens used — max | {s5['resp_max']:,} | {s20['resp_max']:,} |")
 
     # ── 2) Termination reasons bar chart ───────────────────────
     # Normalize reason labels
@@ -159,19 +167,21 @@ def main():
     print(f"\nSaved: {path}")
 
     # ── 3) Turns-per-session bar chart ─────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(10, 3.5), sharey=False)
-    for ax, turns, label in [
-        (axes[0], s5["turns"], "5 min"),
-        (axes[1], s20["turns"], "20 min"),
-    ]:
-        counts = Counter(turns)
-        xs = sorted(counts.keys())
-        ys = [counts[k] for k in xs]
-        ax.bar(xs, ys, color="#5B9BD5" if label == "5 min" else "#ED7D31", width=0.8)
-        ax.set_xlabel("Turns per session")
-        ax.set_ylabel("Number of sessions")
-        ax.set_title(f"Turns per session ({label})")
-        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    fig, ax = plt.subplots(figsize=(10, 3.5))
+    w = 0.45
+    counts = Counter(s5["turns"])
+    xs = sorted(counts.keys())
+    ys = [counts[k] for k in xs]
+    ax.bar([x - w / 2 for x in xs], ys, w, color="#5B9BD5", label="5 min")
+    counts = Counter(s20["turns"])
+    xs = sorted(counts.keys())
+    ys = [counts[k] for k in xs]
+    ax.bar([x + w / 2 for x in xs], ys, w, color="#ED7D31", label="20 min")
+    ax.set_xlabel("Turns per session")
+    ax.set_ylabel("Number of sessions")
+    ax.set_title(f"Turns per session")
+    ax.set_yscale('log')
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     fig.tight_layout()
     path = PLOTS / "turns_per_session.pdf"
     fig.savefig(path)
