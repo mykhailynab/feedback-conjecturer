@@ -145,8 +145,9 @@ def main():
         proved = load_proved_status(results_path)
         if args.aggregate_problems:
             # Need all attempts for per-problem aggregation
+            proved_keys = {k for k, v in proved.items() if v}
             print(f"Computing Goedel session tokens for '{title}' ({len(proved)} attempts)...")
-            tokens = goedel_session_tokens(results_path, goedel_tok)
+            tokens = goedel_session_tokens(results_path, goedel_tok, keys=proved_keys)
             agg = aggregate_per_problem(tokens, proved)
             xs, ys = build_curve_from_aggregated(agg)
         else:
@@ -157,14 +158,17 @@ def main():
         print(f"  {ys[-1]} proved, max tokens: {max(xs)}")
         color = GOEDEL_COLORS[i % len(GOEDEL_COLORS)]
         ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=1.5)
+        ax.hlines(y=ys[-1], xmin=xs[-1], xmax=40960, linestyle='--', color=color, linewidth=1.5)
+        ax.scatter([40960], [ys[-1]], color=color)
         ax.scatter(xs, ys, color=color)
 
     for i, (path_str, title) in enumerate(args.tir):
         results_path = Path(path_str)
         proved = load_proved_status(results_path)
         if args.aggregate_problems:
+            proved_keys = {k for k, v in proved.items() if v}
             print(f"Computing TIR session tokens for '{title}' ({len(proved)} attempts)...")
-            tokens = tir_session_tokens(results_path, qwen_tok)
+            tokens = tir_session_tokens(results_path, qwen_tok, keys=proved_keys)
             agg = aggregate_per_problem(tokens, proved)
             xs, ys = build_curve_from_aggregated(agg)
         else:
@@ -175,14 +179,17 @@ def main():
         print(f"  {ys[-1]} proved, max tokens: {max(xs)}")
         color = TIR_COLORS[i % len(TIR_COLORS)]
         ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=1.5)
+        ax.hlines(y=ys[-1], xmin=xs[-1], xmax=262144, linestyle='--', color=color, linewidth=1.5)
+        ax.scatter([262144], [ys[-1]], color=color)
         ax.scatter(xs, ys, color=color)
 
     ax.set_xlabel("Token budget (tokens used)")
     unit = "Problems" if args.aggregate_problems else "Attempts"
     ax.set_ylabel(f"{unit} proved")
-    ax.set_title(f"Proved {unit.lower()} vs token budget")
+    ax.set_title(f"Proved {unit.lower()} vs token budget (pass@4)")
     ax.legend()
     ax.grid(True, alpha=0.3)
+    ax.set_xlim(-5000, 60000)
     fig.tight_layout()
 
     output_path = Path(args.output)

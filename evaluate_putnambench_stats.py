@@ -108,6 +108,7 @@ def load_attempts_jsonl(path: Path) -> pd.DataFrame:
                 "attempt_answer": obj.get("attempt_answer"),
                 "entropy": safe_float(obj.get("entropy")),
                 "response_length": safe_int(obj.get("response_length")),
+                "trace": obj.get("trace"),
                 "python_calls": safe_int(obj.get("python_calls")) or 0,
                 "python_errors": safe_int(obj.get("python_errors")) or 0,
                 "termination_reason": str(obj.get("termination_reason", "")),
@@ -283,6 +284,13 @@ def main():
     ent_ans = df_attempts[df_attempts["has_answer"]]["entropy"].tolist()
     ms_all = [safe_int(x) for x in df_attempts["attempt_elapsed_ms"].tolist()]
     ms_all = [x for x in ms_all if x is not None]
+
+    # term_reason = "exception:HarmonyError msg=HarmonyError: Could not decode tokens: Invalid utf-8 sequence: incomplete utf-8 byte sequence from index 1962"
+    # print(df_attempts[(df_attempts["has_answer"]) & (df_attempts["termination_reason"] == term_reason)]['trace'].iloc[0]['turns'][-1]['completion_text'])
+    # print(len(df_attempts[(df_attempts["has_answer"]) & (df_attempts["termination_reason"] == term_reason)]['trace'].iloc[0]['full_conversation_token_ids']))
+    # print(df_attempts[(df_attempts["has_answer"]) & (df_attempts["termination_reason"] == term_reason)]['attempt_answer'].iloc[0])
+    # print(df_attempts[(df_attempts["has_answer"]) & (df_attempts["termination_reason"] == term_reason)]['termination_reason'].iloc[0])
+    # raise SystemExit(0)
 
     term_counts = Counter(df_attempts["termination_reason"].fillna("").astype(str).tolist())
     term_counts_has_answer = Counter(df_attempts["termination_reason"][df_attempts["has_answer"]].fillna("").astype(str).tolist())
