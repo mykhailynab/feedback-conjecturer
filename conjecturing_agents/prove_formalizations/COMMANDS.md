@@ -378,6 +378,8 @@ cp logs/stripped_formalizations_goedel_pass/formalizations.jsonl logs/test_prove
        --lean-project-dir /Users/mila/lean/mathlib4 \
        --prover-type tir \
        --add-informal-proof \
+       --conjecturer-attempts logs/putnam_120b_tir_pass4_20min/attempts.jsonl  \
+       --problem-references data/conjecture_formalizer_inputs/references_putnam.csv \
        --tir-temperature 0.6 \
        --tir-top-p 0.95 \
        --tir-backend llamacpp \

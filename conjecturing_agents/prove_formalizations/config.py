@@ -68,6 +68,8 @@ class ProveFormalizationsConfig:
     # since informal and formal proof generation run sequentially per record.
     add_informal_proof: bool = False
     informal_prover: InformalProverConfig = field(default_factory=InformalProverConfig)
+    conjecturer_attempts_path: str = ""  # required when add_informal_proof=True
+    problem_references_path: str = ""   # required when add_informal_proof=True
 
     # Progressive token budget.
     limit_prover_tokens: int = 0
@@ -117,6 +119,10 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
         )
     if cfg.add_informal_proof and cfg.prover_type != "tir":
         errs.append("--add-informal-proof is only supported with --prover-type=tir")
+    if cfg.add_informal_proof and not cfg.conjecturer_attempts_path:
+        errs.append("--conjecturer-attempts is required when --add-informal-proof is set")
+    if cfg.add_informal_proof and not cfg.problem_references_path:
+        errs.append("--problem-references is required when --add-informal-proof is set")
     if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and cfg.tir_backend_type == "ollama" and not cfg.tir_ollama.tokenizer_path:
         errs.append(
             "when --limit-prover-tokens is set with --prover-type=tir, --tir-backend-type=ollama, --tir-ollama-tokenizer-path must be set"
@@ -436,6 +442,27 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
             "Only supported with --prover-type=tir."
         ),
     )
+    p.add_argument(
+        "--conjecturer-attempts",
+        dest="conjecturer_attempts_path",
+        default=ProveFormalizationsConfig.conjecturer_attempts_path,
+        help=(
+            "Path to the conjecturer's attempts.jsonl. "
+            "Required when --add-informal-proof is set. "
+            "Used to extract the solver's full reasoning trace (trace.raw_output)."
+        ),
+    )
+    p.add_argument(
+        "--problem-references",
+        dest="problem_references_path",
+        default=ProveFormalizationsConfig.problem_references_path,
+        help=(
+            "Path to the problem references CSV with id,problem,answer columns. "
+            "Required when --add-informal-proof is set. "
+            "Used to look up the original problem statement text."
+        ),
+    )
+
     # Progressive token budget
     p.add_argument(
         "--limit-prover-tokens",
@@ -524,6 +551,8 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         tir_llamacpp_base_urls=args.tir_llamacpp_base_urls or [],
         tir_llamacpp_max_concurrent=args.tir_llamacpp_max_concurrent,
         add_informal_proof=args.add_informal_proof,
+        conjecturer_attempts_path=args.conjecturer_attempts_path,
+        problem_references_path=args.problem_references_path,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

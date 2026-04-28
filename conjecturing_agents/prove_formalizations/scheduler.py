@@ -486,8 +486,31 @@ class ProveFormalizationsScheduler:
         # sequentially per record, so sharing is safe and avoids duplicate
         # backend instances.
         self._informal_prover: Optional[InformalProverAgent] = None
+        self._problem_text_by_id: Dict[str, str] = {}
+        self._attempt_trace_by_key: Dict[Tuple[Any, Any], str] = {}
         if cfg.add_informal_proof:
             self._informal_prover = InformalProverAgent(cfg.informal_prover)
+            self._load_informal_proof_data(cfg)
+
+    def _load_informal_proof_data(self, cfg: ProveFormalizationsConfig) -> None:
+        """Load problem references CSV and conjecturer attempts JSONL into lookup dicts."""
+        import polars as pl
+        from conjecturing_agents.tools import load_jsonl
+
+        # References CSV: columns "id", "problem", "answer"
+        ref_df = pl.read_csv(cfg.problem_references_path)
+        for row in ref_df.iter_rows(named=True):
+            self._problem_text_by_id[str(row["id"])] = str(row["problem"])
+
+        # Attempts JSONL: each record has problem_id, attempt, trace.raw_output
+        attempts = load_jsonl(cfg.conjecturer_attempts_path)
+        for a in attempts:
+            pid = str(a.get("problem_id", ""))
+            att = a.get("attempt", -1)
+            trace = a.get("trace") or {}
+            raw_output = trace.get("raw_output", "")
+            if pid and raw_output:
+                self._attempt_trace_by_key[(pid, att)] = raw_output
 
     def run(
         self,
@@ -549,20 +572,17 @@ class ProveFormalizationsScheduler:
 
             # Generate informal proof if enabled.
             informal_proof: Optional[str] = None
-            if self._informal_prover is not None and self._proof_backend is not None:
-                # NOTE: Issue: the problem_text and attempt_raw_output are not available in the formalization records
-                # TODO: Extract those two fields from the attempts.jsonl of the conjecturer
-                problem_text = formalization_record.get("problem_text")
-                solution_trace = formalization_record.get("attempt_raw_output")
-                answer_text = formalization_record.get("attempt_answer")
-                lean_stmt = formalization_record.get("lean_statement_without_comment")
-                abbrev_decl = formalization_record.get("final_abbrev_declaration")
+            if self._informal_prover is not None:
+                problem_text = self._problem_text_by_id.get(str(problem_id), "")
+                solution_trace = self._attempt_trace_by_key.get((str(problem_id), attempt), "")
+                answer_text = formalization_record.get("attempt_answer") or ""
+                lean_stmt = formalization_record.get("lean_statement_without_comment") or ""
+                abbrev_decl = formalization_record.get("final_abbrev_declaration") or ""
 
                 can_generate = bool(
-                    problem_text and solution_trace and answer_text and lean_stmt and abbrev_decl
+                    problem_text and solution_trace and answer_text
+                    and lean_stmt and abbrev_decl
                 )
-
-                print(f"\n\n\n\n\n\n\n{problem_text = }\n{solution_trace = }\n{answer_text = }\n{lean_stmt = }\n{abbrev_decl = }\n\n\n\n\n\n")
 
                 if can_generate:
                     lean_with_answer = replace_abbrev_in_statement(lean_stmt, abbrev_decl)
