@@ -232,6 +232,40 @@ screen -dmS monitor_tir_final_pass4_strip tail -f prove_formalizations_tir_llama
 ```
 
 
+Whole dataset, no strip TIR, add informal proof:
+```sh
+scp -i /Users/mila/.ssh/vastai -P 24409 logs/putnam_120b_tir_pass4_20min/attempts.jsonl root@ssh7.vast.ai:/workspace/logs/putnam_120b_tir_pass4_20min/attempts.jsonl
+scp -i /Users/mila/.ssh/vastai -P 24409 data/conjecture_formalizer_inputs/references_putnam.csv root@ssh7.vast.ai:/workspace/data/conjecture_formalizer_inputs/references_putnam.csv
+
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-no-strip-thinking \
+        --add-informal-proof \
+        --conjecturer-attempts logs/putnam_120b_tir_pass4_20min/attempts.jsonl \
+        --problem-references data/conjecture_formalizer_inputs/references_putnam.csv \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 1 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/conjecture_formalization_logs_20mins/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 4 \
+        --limit-prover-tokens 262144 \
+        --continue &> prove_formalizations_tir_llamacpp_addinformal.log'
+
+screen -S monitor_prove tail -f prove_formalizations_tir_llamacpp_addinformal.log
+```
+
+
 ---
 
 ## Goedel Prover V2 (Ollama backend)
