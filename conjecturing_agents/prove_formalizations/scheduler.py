@@ -541,25 +541,29 @@ class ProveFormalizationsScheduler:
         outer_workers = cfg.parallelism // 2 if cfg.enable_parallel_disproof else cfg.parallelism
         outer_workers = max(1, outer_workers)
 
-        def process(rec: Dict[str, Any]) -> Dict[str, Any]:
-            problem_id = rec.get("problem_id", 0)
-            attempt = rec.get("attempt", 0)
+        def process(formalization_record: Dict[str, Any]) -> Dict[str, Any]:
+            problem_id = formalization_record.get("problem_id", 0)
+            attempt = formalization_record.get("attempt", 0)
             base_seed = hash((problem_id, attempt)) & 0x7FFFFFFF
             saved = incomplete_map.get((problem_id, attempt))
 
             # Generate informal proof if enabled.
             informal_proof: Optional[str] = None
             if self._informal_prover is not None and self._proof_backend is not None:
-                problem_text = rec.get("problem_text")
-                solution_trace = rec.get("attempt_raw_output")
-                answer_text = rec.get("attempt_answer")
-                lean_stmt = rec.get("lean_statement_without_comment")
-                abbrev_decl = rec.get("final_abbrev_declaration")
+                # NOTE: Issue: the problem_text and attempt_raw_output are not available in the formalization records
+                # TODO: Extract those two fields from the attempts.jsonl of the conjecturer
+                problem_text = formalization_record.get("problem_text")
+                solution_trace = formalization_record.get("attempt_raw_output")
+                answer_text = formalization_record.get("attempt_answer")
+                lean_stmt = formalization_record.get("lean_statement_without_comment")
+                abbrev_decl = formalization_record.get("final_abbrev_declaration")
 
                 can_generate = bool(
-                    problem_text and solution_trace and answer_text
-                    and lean_stmt and abbrev_decl
+                    problem_text and solution_trace and answer_text and lean_stmt and abbrev_decl
                 )
+
+                print(f"\n\n\n\n\n\n\n{problem_text = }\n{solution_trace = }\n{answer_text = }\n{lean_stmt = }\n{abbrev_decl = }\n\n\n\n\n\n")
+
                 if can_generate:
                     lean_with_answer = replace_abbrev_in_statement(lean_stmt, abbrev_decl)
                     informal_result = self._informal_prover.generate_proof(
@@ -579,7 +583,7 @@ class ProveFormalizationsScheduler:
                 assert self._disproof_agent is not None
                 assert self._disproof_backend is not None
                 return process_record_parallel(
-                    rec,
+                    formalization_record,
                     proof_agent=self._proof_agent,
                     proof_backend=self._proof_backend,
                     disproof_agent=self._disproof_agent,
@@ -596,7 +600,7 @@ class ProveFormalizationsScheduler:
                 assert self._disproof_agent is not None
                 assert self._disproof_backend is not None
                 return process_record_sequential_with_disproof(
-                    rec,
+                    formalization_record,
                     proof_agent=self._proof_agent,
                     proof_backend=self._proof_backend,
                     disproof_agent=self._disproof_agent,
@@ -611,7 +615,7 @@ class ProveFormalizationsScheduler:
                 )
             else:
                 return process_record_sequential(
-                    rec,
+                    formalization_record,
                     proof_agent=self._proof_agent,
                     proof_backend=self._proof_backend,
                     proof_retries=cfg.proof_retries,

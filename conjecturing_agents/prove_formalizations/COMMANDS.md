@@ -370,12 +370,14 @@ cp -r logs/stripped_formalizations_goedel_pass/ logs/test_prove_formalizations &
 ```
 ### LLamacpp:
 ```sh
-rm -rf logs/test_prove_formalizations && \                                 
-cp -r logs/stripped_formalizations_goedel_pass/ logs/test_prove_formalizations && \
+rm -rf logs/test_prove_formalizations && \
+mkdir logs/test_prove_formalizations && \
+cp logs/stripped_formalizations_goedel_pass/formalizations.jsonl logs/test_prove_formalizations/ && \
   python conjecturing_agents/prove_formalizations.py \
        --formalizations-path logs/test_prove_formalizations/formalizations.jsonl \
        --lean-project-dir /Users/mila/lean/mathlib4 \
        --prover-type tir \
+       --add-informal-proof \
        --tir-temperature 0.6 \
        --tir-top-p 0.95 \
        --tir-backend llamacpp \
