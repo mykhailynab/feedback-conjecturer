@@ -46,6 +46,8 @@ ProverAgent = Union[GoedelProverAgent, TIRProverAgent]
 ProverBackend = Union[RawBackend, TIRBackend]
 ProverResult = Union[GoedelProverResult, TIRProverResult]
 
+from conjecturing_agents.agents.informal_prover import InformalProverAgent
+
 from .config import (
     ProveFormalizationsConfig,
     make_goedel_prover_config,
@@ -80,6 +82,7 @@ def _run_prove_attempts(
     token_limit: int = 0,
     initial_messages: Optional[List[Dict[str, Any]]] = None,
     initial_partial_response: str = "",
+    informal_proof: Optional[str] = None,
 ) -> ProverResult:
     """Run up to ``retries`` proof attempts, stopping as soon as one succeeds.
 
@@ -101,6 +104,7 @@ def _run_prove_attempts(
             token_limit=token_limit,
             initial_messages=initial_messages if i == 0 else None,
             partial_response=initial_partial_response if i == 0 else "",
+            informal_proof=informal_proof,
         )
         last_result = result
         if result.proved:
@@ -145,6 +149,7 @@ def process_record_sequential(
     event_logger: Optional[EventLoggerFn],
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
+    informal_proof: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Prove only (no disproof).  Returns the result dict to be written to JSONL.
@@ -171,6 +176,7 @@ def process_record_sequential(
         token_limit=token_limit,
         initial_messages=init_msgs,
         initial_partial_response=init_partial,
+        informal_proof=informal_proof,
     )
 
     return _build_output_record(
@@ -179,6 +185,7 @@ def process_record_sequential(
         negated_lean=None,
         proof_result=proof_result,
         disproof_result=None,
+        informal_proof_text=informal_proof,
     )
 
 
@@ -195,6 +202,7 @@ def process_record_sequential_with_disproof(
     event_logger: Optional[EventLoggerFn],
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
+    informal_proof: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run proof first; if every retry fails, run disproof in the same thread.
@@ -222,6 +230,7 @@ def process_record_sequential_with_disproof(
         token_limit=token_limit,
         initial_messages=init_proof_msgs,
         initial_partial_response=init_proof_partial,
+        informal_proof=informal_proof,
     )
 
     # If proof is still incomplete (token-limited), skip disproof for now.
@@ -251,6 +260,7 @@ def process_record_sequential_with_disproof(
             negated_lean=negated_lean,
             proof_result=proof_result,
             disproof_result=disproof_result,
+            informal_proof_text=informal_proof,
         )
 
     return _build_output_record(
@@ -259,6 +269,7 @@ def process_record_sequential_with_disproof(
         negated_lean=None,
         proof_result=proof_result,
         disproof_result=None,
+        informal_proof_text=informal_proof,
     )
 
 
@@ -275,6 +286,7 @@ def process_record_parallel(
     event_logger: Optional[EventLoggerFn],
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
+    informal_proof: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run proof and disproof concurrently.  The first to succeed signals the
@@ -318,6 +330,7 @@ def process_record_parallel(
             token_limit=token_limit,
             initial_messages=init_proof_msgs,
             initial_partial_response=init_proof_partial,
+            informal_proof=informal_proof,
         )
         if proof_result.proved:
             stop_disproof.set()
@@ -352,6 +365,7 @@ def process_record_parallel(
         negated_lean=negated_lean,
         proof_result=proof_result,
         disproof_result=disproof_result,
+        informal_proof_text=informal_proof,
     )
 
 
@@ -366,6 +380,7 @@ def _build_output_record(
     negated_lean: Optional[str],
     proof_result: Optional[ProverResult],
     disproof_result: Optional[ProverResult],
+    informal_proof_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     proved = proof_result.proved if proof_result is not None else False
     disproved = disproof_result.proved if disproof_result is not None else False
@@ -385,6 +400,8 @@ def _build_output_record(
         "proved": proved,
         "disproved": disproved,
         "incomplete": incomplete,
+        "informal_proof_used": informal_proof_text is not None,
+        "informal_proof_text": informal_proof_text,
         "proof_result": _result_to_dict(proof_result) if proof_result is not None else None,
         "disproof_result": _result_to_dict(disproof_result) if disproof_result is not None else None,
     }
@@ -464,6 +481,14 @@ class ProveFormalizationsScheduler:
                 self._disproof_agent = GoedelProverAgent(goedel_disproof_cfg)
             self._disproof_backend = self._proof_backend  # shared
 
+        # Build informal prover (when --add-informal-proof is active).
+        # Re-uses the TIR proof backend — informal and formal proofs run
+        # sequentially per record, so sharing is safe and avoids duplicate
+        # backend instances.
+        self._informal_prover: Optional[InformalProverAgent] = None
+        if cfg.add_informal_proof:
+            self._informal_prover = InformalProverAgent(cfg.informal_prover)
+
     def run(
         self,
         records: List[Dict[str, Any]],
@@ -522,6 +547,34 @@ class ProveFormalizationsScheduler:
             base_seed = hash((problem_id, attempt)) & 0x7FFFFFFF
             saved = incomplete_map.get((problem_id, attempt))
 
+            # Generate informal proof if enabled.
+            informal_proof: Optional[str] = None
+            if self._informal_prover is not None and self._proof_backend is not None:
+                problem_text = rec.get("problem_text")
+                solution_trace = rec.get("attempt_raw_output")
+                answer_text = rec.get("attempt_answer")
+                lean_stmt = rec.get("lean_statement_without_comment")
+                abbrev_decl = rec.get("final_abbrev_declaration")
+
+                can_generate = bool(
+                    problem_text and solution_trace and answer_text
+                    and lean_stmt and abbrev_decl
+                )
+                if can_generate:
+                    lean_with_answer = replace_abbrev_in_statement(lean_stmt, abbrev_decl)
+                    informal_result = self._informal_prover.generate_proof(
+                        problem_statement=problem_text,
+                        solution_trace=solution_trace,
+                        answer=answer_text,
+                        lean_statement=lean_with_answer,
+                        backend=self._proof_backend,
+                        seed=base_seed,
+                        event_logger=self.event_logger,
+                        metadata={"problem_id": problem_id, "attempt": attempt, "phase": "informal_proof"},
+                    )
+                    if informal_result.proof_text:
+                        informal_proof = informal_result.proof_text
+
             if cfg.enable_parallel_disproof:
                 assert self._disproof_agent is not None
                 assert self._disproof_backend is not None
@@ -537,6 +590,7 @@ class ProveFormalizationsScheduler:
                     event_logger=self.event_logger,
                     token_limit=cfg.limit_prover_tokens,
                     incomplete_result=saved,
+                    informal_proof=informal_proof,
                 )
             elif cfg.enable_sequential_disproof:
                 assert self._disproof_agent is not None
@@ -553,6 +607,7 @@ class ProveFormalizationsScheduler:
                     event_logger=self.event_logger,
                     token_limit=cfg.limit_prover_tokens,
                     incomplete_result=saved,
+                    informal_proof=informal_proof,
                 )
             else:
                 return process_record_sequential(
@@ -564,6 +619,7 @@ class ProveFormalizationsScheduler:
                     event_logger=self.event_logger,
                     token_limit=cfg.limit_prover_tokens,
                     incomplete_result=saved,
+                    informal_proof=informal_proof,
                 )
 
         with ThreadPoolExecutor(max_workers=outer_workers) as pool:
@@ -588,7 +644,8 @@ class ProveFormalizationsScheduler:
         self._proof_backend.close()
         if self._disproof_agent is not None:
             self._disproof_agent.close()
-        # _disproof_backend is the same object as _proof_backend — already closed above.
+        if self._informal_prover is not None:
+            self._informal_prover.close()
 
     def __enter__(self) -> "ProveFormalizationsScheduler":
         return self

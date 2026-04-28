@@ -127,3 +127,31 @@ Lean 4 proof and submit it with lean_final.
 {theorem_statement}
 ```
 """
+
+# ---------------------------------------------------------------------------
+# Informal-proof-aware prompt variants
+# -------------------a--------------------------------------------------------
+
+INFORMAL_PROOF_SYSTEM_ADDENDUM = """
+
+An informal mathematical proof is provided alongside the theorem statement. \
+This proof outlines the key ideas and steps needed to prove the theorem. \
+Use it as a guide for constructing the formal Lean 4 proof, but verify each \
+step rigorously — the informal proof may contain gaps or imprecisions that \
+need to be resolved in the formal version."""
+
+INITIAL_USER_MESSAGE_WITH_INFORMAL_PROOF = """\
+Please prove the following theorem. Replace the `sorry` placeholder with a valid \
+Lean 4 proof and submit it with lean_final.
+
+```lean4
+{theorem_statement}
+```
+
+## Informal proof (for guidance)
+
+The following informal proof outlines the mathematical argument. Use it to guide \
+your formal proof construction, but verify each step with the lean tool.
+
+{informal_proof}
+"""

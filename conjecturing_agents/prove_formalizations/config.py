@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from typing import List
 
 from conjecturing_agents.agents.goedel_prover.config import GoedelProverConfig
+from conjecturing_agents.agents.informal_prover.config import InformalProverConfig
 from conjecturing_agents.agents.tir_prover.config import TIRProverConfig
 from conjecturing_agents.inference_backends.ollama_raw import OllamaConfig
 from conjecturing_agents.inference_backends.ollama_tir import OllamaTIRConfig
@@ -62,6 +63,12 @@ class ProveFormalizationsConfig:
     tir_llamacpp_base_urls: List[str] = field(default_factory=list)
     tir_llamacpp_max_concurrent: int = 1
 
+    # Informal proof generation (used with --add-informal-proof).
+    # The informal prover shares the TIR backend (tir_ollama / tir_llamacpp)
+    # since informal and formal proof generation run sequentially per record.
+    add_informal_proof: bool = False
+    informal_prover: InformalProverConfig = field(default_factory=InformalProverConfig)
+
     # Progressive token budget.
     limit_prover_tokens: int = 0
 
@@ -108,6 +115,8 @@ def validate_cfg(cfg: ProveFormalizationsConfig) -> None:
         errs.append(
             "when --enable-parallel-disproof is set, --parallelism must be divisible by 2"
         )
+    if cfg.add_informal_proof and cfg.prover_type != "tir":
+        errs.append("--add-informal-proof is only supported with --prover-type=tir")
     if cfg.limit_prover_tokens > 0 and cfg.prover_type == "tir" and cfg.tir_backend_type == "ollama" and not cfg.tir_ollama.tokenizer_path:
         errs.append(
             "when --limit-prover-tokens is set with --prover-type=tir, --tir-backend-type=ollama, --tir-ollama-tokenizer-path must be set"
@@ -222,6 +231,7 @@ def make_tir_backend(cfg: ProveFormalizationsConfig):
         return LlamaCppTIRBackend(cfg.tir_llamacpp)
     else:
         raise ValueError(f"Unknown tir_backend_type: {cfg.tir_backend_type!r}")
+
 
 
 # ============================================================
@@ -414,6 +424,18 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         help="Subdirectory for TIR Lean temp files inside lean_project_dir. Default: %(default)s.",
     )
 
+    # Informal proof generation
+    p.add_argument(
+        "--add-informal-proof",
+        dest="add_informal_proof",
+        action="store_true",
+        default=ProveFormalizationsConfig.add_informal_proof,
+        help=(
+            "Before each TIR proof attempt, run the informal prover to generate "
+            "a natural-language proof outline and include it in the TIR prover's prompt. "
+            "Only supported with --prover-type=tir."
+        ),
+    )
     # Progressive token budget
     p.add_argument(
         "--limit-prover-tokens",
@@ -501,6 +523,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         tir_lean_workspace_subdir=args.tir_lean_workspace_subdir,
         tir_llamacpp_base_urls=args.tir_llamacpp_base_urls or [],
         tir_llamacpp_max_concurrent=args.tir_llamacpp_max_concurrent,
+        add_informal_proof=args.add_informal_proof,
         limit_prover_tokens=args.limit_prover_tokens,
         print_agent_conv=args.print_agent_conv,
         parallelism=args.parallelism,

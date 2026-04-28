@@ -154,6 +154,7 @@ class GoedelProverAgent:
         token_limit: int = 0,
         initial_messages: Optional[List[Dict[str, str]]] = None,
         partial_response: str = "",
+        informal_proof: Optional[str] = None,
     ) -> GoedelProverResult:
         """
         Attempt to prove ``theorem_statement`` using up to
@@ -174,7 +175,9 @@ class GoedelProverAgent:
             partial_response: If the prior run was cut off mid-generation,
                 this is the assistant text produced before the cut.  On the
                 first round the model continues from this point.
+            informal_proof: Unused, for API compatibility
         """
+        assert informal_proof is None, "Goedel-Prover does not support informal proof guidance"
         _meta = metadata or {}
 
         def _log(event_type: str, payload: Dict[str, Any]) -> None:

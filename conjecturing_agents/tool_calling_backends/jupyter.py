@@ -1,3 +1,8 @@
+"""
+TODO: NOTE: IMPORTANT: The Jupyter tool allows to import new libraries.
+For example, one of the agents imported subprocess and started grep'ping the contents of the file system.
+This behavior should be prohibited in the future.
+"""
 from __future__ import annotations
 
 import os

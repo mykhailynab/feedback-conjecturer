@@ -48,7 +48,12 @@ from conjecturing_agents.tool_calling_backends.jupyter import (
 )
 
 from .config import TIRProverConfig, TIRProverResult
-from .prompts import INITIAL_USER_MESSAGE, LEAN_FINAL_MISSING_THEOREM_CORRECTION
+from .prompts import (
+    INFORMAL_PROOF_SYSTEM_ADDENDUM,
+    INITIAL_USER_MESSAGE,
+    INITIAL_USER_MESSAGE_WITH_INFORMAL_PROOF,
+    LEAN_FINAL_MISSING_THEOREM_CORRECTION,
+)
 
 
 class TIRProverAgent:
@@ -95,6 +100,7 @@ class TIRProverAgent:
         token_limit: int = 0,
         initial_messages: Optional[List[Dict[str, Any]]] = None,
         partial_response: str = "",
+        informal_proof: Optional[str] = None,
     ) -> TIRProverResult:
         """
         Attempt to prove ``theorem_statement`` using native tool-call iterations.
@@ -243,14 +249,20 @@ class TIRProverAgent:
         if initial_messages is not None:
             messages: List[Dict[str, Any]] = list(initial_messages)
         else:
+            system_content = self.cfg.system_prompt
+            if informal_proof:
+                system_content = system_content + INFORMAL_PROOF_SYSTEM_ADDENDUM
+                user_content = INITIAL_USER_MESSAGE_WITH_INFORMAL_PROOF.format(
+                    theorem_statement=theorem_statement,
+                    informal_proof=informal_proof,
+                )
+            else:
+                user_content = INITIAL_USER_MESSAGE.format(
+                    theorem_statement=theorem_statement,
+                )
             messages = [
-                {"role": "system", "content": self.cfg.system_prompt},
-                {
-                    "role": "user",
-                    "content": INITIAL_USER_MESSAGE.format(
-                        theorem_statement=theorem_statement
-                    ),
-                },
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
             ]
 
         # ------------------------------------------------------------------ #
