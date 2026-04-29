@@ -10,7 +10,76 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
+
 from tqdm import tqdm
+
+
+def turns_to_chat(
+    turns: list[dict[str, Any]],
+    *,
+    exclude_last_tool_call_result: bool = False,
+) -> list[dict[str, Any]]:
+    """Convert TIR turn records into OpenAI-style chat messages.
+
+    Each turn becomes an assistant message (with optional ``reasoning_content``
+    and ``tool_calls``), followed by one ``tool`` message per tool call.
+
+    Parameters
+    ----------
+    turns:
+        List of turn dicts as stored in ``proof_result.turns``
+        (schema: ``{turn, thinking, content, tool_calls}``).
+    exclude_last_tool_call_result:
+        If True, omit the ``tool`` result message for tool calls in the last
+        turn (mirrors the old ``exclude_last_tool_call_result`` flag).
+    """
+    messages: list[dict[str, Any]] = []
+    n_turns = len(turns)
+    for ti, t in enumerate(turns):
+        thinking = t.get("thinking", "") or ""
+        content = t.get("content", "") or ""
+        tool_calls_raw = t.get("tool_calls", [])
+
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": content or None,
+        }
+        if thinking:
+            assistant_msg["reasoning_content"] = thinking
+
+        if tool_calls_raw:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": f"call_{ti}_{ci}",
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name", ""),
+                        "arguments": (
+                            json.dumps(tc["arguments"])
+                            if isinstance(tc.get("arguments"), dict)
+                            else str(tc.get("arguments", ""))
+                        ),
+                    },
+                }
+                for ci, tc in enumerate(tool_calls_raw)
+            ]
+
+        messages.append(assistant_msg)
+
+        # Append tool result messages.
+        is_last_turn = ti == n_turns - 1
+        for ci, tc in enumerate(tool_calls_raw):
+            if is_last_turn and exclude_last_tool_call_result:
+                continue
+            messages.append({
+                "role": "tool",
+                "tool_call_id": f"call_{ti}_{ci}",
+                "name": tc.get("name", ""),
+                "content": tc.get("result", "") or "",
+            })
+
+    return messages
 
 
 def goedel_session_tokens(
@@ -55,9 +124,11 @@ def tir_session_tokens(
     results_path: Path,
     tokenizer,
     keys: set[tuple[str, int]] | None = None,
+    exclude_last_tool_call_result=False,
 ) -> dict[tuple[str, int], int]:
     """
-    For each (problem_id, attempt), sum all conversation text and tokenize.
+    For each (problem_id, attempt), tokenize the conversation via
+    ``apply_chat_template``.
 
     If *keys* is provided, only tokenize those (problem_id, attempt) pairs.
     """
@@ -75,10 +146,13 @@ def tir_session_tokens(
             p.update(1)
             pr = d.get("proof_result")
             if not pr:
+                result[(pid, att)] = 0
                 continue
             turns = pr.get("turns") or []
             if not turns:
+                result[(pid, att)] = 0
                 continue
+            # NOTE: V1 schema hack
             parts = [d.get("proved_lean", "") or ""]
             for t in turns:
                 parts.append(t.get("thinking", "") or "")

@@ -235,7 +235,7 @@ def process_record_sequential_with_disproof(
 
     # If proof is still incomplete (token-limited), skip disproof for now.
     disproof_result: Optional[ProverResult] = None
-    if not proof_result.proved and not proof_result.incomplete:
+    if not proof_result.proved and not proof_result.token_limit_triggered:
         try:
             negated_lean = negate_theorem_statement(proved_lean)
         except Exception as exc:
@@ -386,8 +386,8 @@ def _build_output_record(
     disproved = disproof_result.proved if disproof_result is not None else False
 
     incomplete = (
-        (proof_result is not None and proof_result.incomplete) or
-        (disproof_result is not None and disproof_result.incomplete)
+        (proof_result is not None and proof_result.token_limit_triggered) or
+        (disproof_result is not None and disproof_result.token_limit_triggered)
     )
     out: Dict[str, Any] = {
         "problem_id": record.get("problem_id"),

@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+ADD_INFORMAL=false
+for arg in "$@"; do
+    case "$arg" in
+        --add-files-for-informal) ADD_INFORMAL=true ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -62,6 +69,12 @@ zip conjecturing_agents_plus_references.zip \
     data/conjecture_formalizer_inputs/references_putnam.csv
 
 # Individual root-level files
+if [ "$ADD_INFORMAL" = true ]; then
+    zip "$OUTPUT" \
+        data/conjecture_formalizer_inputs/references_putnam.csv \
+        logs/putnam_120b_tir_pass4_20min/attempts.jsonl
+fi
+
 zip "$OUTPUT" \
     requirements.txt \
     setup_remote_for_goedel.sh \

@@ -445,8 +445,8 @@ class GoedelProverAgent:
         elapsed_ms = int((time.time() - t0) * 1000)
 
         # Build resume state when stopped by the token limit.
-        incomplete = termination_reason == "token_limit"
-        if incomplete:
+        token_limit_triggered = termination_reason == "token_limit"
+        if token_limit_triggered:
             _resume_prompt = self._render_prompt(save_messages)
             if save_partial:
                 _resume_prompt = _resume_prompt + save_partial
@@ -459,7 +459,7 @@ class GoedelProverAgent:
             "termination_reason": termination_reason,
             "rounds_used": len(rounds),
             "elapsed_ms": elapsed_ms,
-            "incomplete": incomplete,
+            "token_limit_triggered": token_limit_triggered,
             "total_context_tokens": total_context_tokens,
         })
         return GoedelProverResult(
@@ -471,10 +471,10 @@ class GoedelProverAgent:
             rounds_used=len(rounds),
             elapsed_ms=elapsed_ms,
             rounds=rounds,
-            incomplete=incomplete,
+            token_limit_triggered=token_limit_triggered,
             total_context_tokens=total_context_tokens,
-            conversation_history=list(save_messages) if incomplete else [],
-            partial_response=save_partial if incomplete else "",
+            conversation_history=list(save_messages) if token_limit_triggered else [],
+            partial_response=save_partial if token_limit_triggered else "",
         )
 
     # ------------------------------------------------------------------

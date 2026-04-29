@@ -172,7 +172,7 @@ class GoedelProverResult:
     #   text generated before the cut-off, and total_context_tokens is the
     #   token count of render(conversation_history)+partial_response.
     # On resume, the caller rebuilds that prompt and continues generation.
-    incomplete: bool = False
+    token_limit_triggered: bool = False
     total_context_tokens: int = 0
     conversation_history: List[Dict[str, str]] = field(default_factory=list)
     partial_response: str = ""
