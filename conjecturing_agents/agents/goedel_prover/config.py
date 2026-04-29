@@ -167,7 +167,7 @@ class GoedelProverResult:
 
     # Progressive proving / resume support.
     # When termination_reason == "token_limit":
-    #   incomplete=True, conversation_history holds the messages snapshot
+    #   token_limit_triggered=True, conversation_history holds the messages snapshot
     #   before the interrupted round, partial_response holds the assistant
     #   text generated before the cut-off, and total_context_tokens is the
     #   token count of render(conversation_history)+partial_response.

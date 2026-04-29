@@ -13,6 +13,7 @@ from analysis_and_inspection.for_paper.tokenize_utils import (
     tir_proof_tokens,
     tir_session_tokens,
 )
+from conjecturing_agents.inference_backends.llamacpp_tir import parse_tool_calls_from_thinking
 
 ROOT = Path(__file__).resolve().parents[2]
 PLOTS = ROOT / "plots"
@@ -69,6 +70,9 @@ def main():
     non_skipped_keys = []
     no_tokens_limited_count = 0
     unparsed_tool_call_count = 0
+    unparsed_tool_call_no_start = 0
+    thinking_tc_parsed_count = 0
+    thinking_tc_parsed_total = 0
     no_tokens_other_reasons = 0
     for line in result_lines:
         rec = json.loads(line)
@@ -112,12 +116,18 @@ def main():
             last_thinking = proof_result['turns'][-1]['thinking']
             if last_thinking.endswith("</tool_call>"):
                 unparsed_tool_call_count += 1
+                tool_call_start = last_thinking.find("<tool_call>")
+                if tool_call_start == -1:
+                    unparsed_tool_call_no_start += 1
+                else:
+                    parsed_tcs = parse_tool_calls_from_thinking(last_thinking)
+                    if parsed_tcs:
+                        thinking_tc_parsed_count += 1
+                        thinking_tc_parsed_total += len(parsed_tcs)
             elif len(tir_tok.encode(last_thinking)) > (16384 - 16):  # include buffer
                 no_tokens_limited_count += 1
             else:
                 no_tokens_other_reasons += 1
-                # print("\n\n\nCOUNT")
-                # print(len(tir_tok.encode(last_thinking)))
         if 'skipped' not in rec:
             skipped_is_null_count += 1
             non_skipped_keys.append(rec_key)
@@ -129,7 +139,6 @@ def main():
         else:
             skip_reason_counts[rec['skip_reason']] += 1
         term_reason_map[(rec["problem_id"], rec["attempt"])] = term_reason
-    # raise SystemExit(0)
     print(f"{incomplete_count} / {total_attempts} are incomplete")
     print(f"{no_proof_result_count} / {total_attempts} have no proof result")
     print()
@@ -152,6 +161,8 @@ def main():
     print()
     print(f"{no_tokens_limited_count} / {term_reason_counts['no_tokens']} were token-limited")
     print(f"{unparsed_tool_call_count} / {term_reason_counts['no_tokens']} had unparsed tool calls")
+    print(f"  {unparsed_tool_call_no_start} / {unparsed_tool_call_count} had no <tool_call> start tag")
+    print(f"  {thinking_tc_parsed_count} / {unparsed_tool_call_count - unparsed_tool_call_no_start} were parseable ({thinking_tc_parsed_total} tool calls total)")
     print(f"{no_tokens_other_reasons} / {term_reason_counts['no_tokens']} had no tokens for other reasons")
     print()
     print(f"proved_term_reason_counts = {dict(proved_term_reason_counts)}")
@@ -178,7 +189,7 @@ def main():
         if v == min_tokens:
             print("Shortest non-zero attempt:", k)
             print(f"Term reason: {term_reason}")
-            print(f"Turns: {proof_result['turns']}")
+            # print(f"Turns: {proof_result['turns']}")
         # if term_reason == "no_tokens":
         #     assert proof_result['turns'][-1]['content'] == ""
         #     assert proof_result['turns'][-1]['tool_calls'] == []

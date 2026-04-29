@@ -16,6 +16,7 @@ The multi-turn tool dispatch loop is inherited from TIRBackend.run_session().
 from __future__ import annotations
 
 import json
+import re
 import time
 import threading
 from argparse import ArgumentParser
@@ -26,6 +27,62 @@ import httpx
 import openai
 
 from .tir_base import TIRBackend, TIRGenerationConfig, TIRStreamChunk, TIRToolCallSpec, TIRTokenCounter
+
+
+_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*<function=(\w+)>\s*(.*?)</function>\s*</tool_call>",
+    re.DOTALL,
+)
+_PARAM_RE = re.compile(
+    r"<parameter=(\w+)>\s*(.*?)\s*</parameter>",
+    re.DOTALL,
+)
+
+
+def parse_tool_calls_from_thinking(thinking: str) -> List[TIRToolCallSpec]:
+    """Parse ``<tool_call>`` XML blocks from the tail of thinking text.
+
+    llama.cpp sometimes fails to parse tool calls that the model emits inside
+    ``reasoning_content``.  This helper recovers them so they can be dispatched
+    normally.  Only trailing tool-call blocks are considered (i.e. text after
+    the last non-tool-call content).
+
+    Returns an empty list when no valid blocks are found.
+    """
+    # Find the start of the trailing tool-call region by walking backwards
+    # through consecutive </tool_call>...<tool_call> blocks.
+    last_close = thinking.rfind("</tool_call>")
+    if last_close == -1:
+        return []
+    # Find the earliest <tool_call> that is part of the trailing sequence.
+    # We search backwards: find the <tool_call> before each </tool_call>.
+    pos = last_close
+    first_open = -1
+    while True:
+        open_pos = thinking.rfind("<tool_call>", 0, pos)
+        if open_pos == -1:
+            break
+        first_open = open_pos
+        # Check if there's another </tool_call> before this <tool_call>
+        # that would indicate another block preceding it.
+        pos = open_pos
+    if first_open == -1:
+        return []
+
+    tail = thinking[first_open:]
+    results: List[TIRToolCallSpec] = []
+    for i, m in enumerate(_TOOL_CALL_RE.finditer(tail)):
+        func_name = m.group(1)
+        params_block = m.group(2)
+        args: Dict[str, Any] = {}
+        for pm in _PARAM_RE.finditer(params_block):
+            args[pm.group(1)] = pm.group(2)
+        results.append(TIRToolCallSpec(
+            id=f"thinking-tc-{i}",
+            name=func_name,
+            arguments=args,
+        ))
+    return results
 
 
 @dataclass
@@ -246,6 +303,7 @@ class LlamaCppTIRBackend(TIRBackend):
 
         # Tool call delta accumulation: {index: (id, name, arguments_str)}
         tc_accum: Dict[int, List] = {}  # index -> [id, name, args_str]
+        thinking_accum = ""
         first_chunk = True
         last_printed_think = False
 
@@ -295,6 +353,8 @@ class LlamaCppTIRBackend(TIRBackend):
                         print('\n[\\think]\n')
                     print(content_text, end="", flush=True)
 
+            if thinking_text:
+                thinking_accum += thinking_text
             if thinking_text or content_text:
                 yield TIRStreamChunk(thinking=thinking_text, content=content_text)
 
@@ -309,6 +369,17 @@ class LlamaCppTIRBackend(TIRBackend):
             tool_calls_final.append(
                 TIRToolCallSpec(id=tc_id, name=tc_name, arguments=args)
             )
+
+        # Hotfix: parse tool calls emitted in thinking (llama.cpp doesn't
+        # natively parse these from reasoning_content).
+        if not tool_calls_final and thinking_accum:
+            parsed = parse_tool_calls_from_thinking(thinking_accum)
+            if parsed:
+                tool_calls_final.extend(parsed)
+                self._log_event("tir_thinking_tool_calls_parsed", {
+                    "count": len(parsed),
+                    "names": [tc.name for tc in parsed],
+                })
 
         if tool_calls_final:
             if self._verbose:
@@ -338,4 +409,4 @@ class LlamaCppTIRBackend(TIRBackend):
             pass
 
 
-__all__ = ["LlamaCppTIRConfig", "LlamaCppTIRBackend"]
+__all__ = ["LlamaCppTIRConfig", "LlamaCppTIRBackend", "parse_tool_calls_from_thinking"]
