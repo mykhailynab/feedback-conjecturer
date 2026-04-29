@@ -315,10 +315,17 @@ class TIRProverAgent:
                 )
                 tools.append(jupyter_tool.tool_def)
                 tool_handlers[self.cfg.jupyter.tool_name] = jupyter_tool.handle_call
+        finally:
+            if jupyter_tool is not None:
+                try:
+                    jupyter_tool.close()
+                except Exception:
+                    pass
 
-            # ------------------------------------------------------------------ #
-            # Run the TIR session
-            # ------------------------------------------------------------------ #
+        # ------------------------------------------------------------------ #
+        # Run the TIR session
+        # ------------------------------------------------------------------ #
+        try:
             session_result = backend.run_session(
                 messages=messages,
                 tools=tools,
@@ -326,13 +333,8 @@ class TIRProverAgent:
                 cfg=gen_cfg,
                 stop_event=_combined_stop,
             )
-
         finally:
-            if jupyter_tool is not None:
-                try:
-                    jupyter_tool.close()
-                except Exception:
-                    pass
+            pass
 
         # ------------------------------------------------------------------ #
         # Build result
@@ -378,6 +380,21 @@ class TIRProverAgent:
             # NOTE: not used in --continue
             partial_assistant_turn=session_result.partial_assistant_turn,
         )
+    
+        # TODO: New schema
+        # TIRProverResult(
+        #     proved=proved,
+        #     termination_reason=termination_reason, # is NOT a pass-through for the session result. created separately
+        #     proved_lean=_state["proved_lean"],
+        #     # turns_used=...,  # remove this. Can be later calculated from session result.
+        #     elapsed_ms=elapsed_ms,
+        #     session_result=..., # add this field
+        #     # turns=turns_as_dicts,  # we remove this. messages should be dicts 
+        #     # exception=session_result.exception, # we remove this. we have this in the session result.
+        #     # incomplete=incomplete, # we remove this. we have this in the session result.
+        #     # conversation_history=session_result.messages_at_cutoff if incomplete else [], # we remove this. we have this in the session result.
+        #     # partial_assistant_turn=session_result.partial_assistant_turn, # we remove this. we have this in the session result.
+        # )
 
     # ------------------------------------------------------------------
     # Lifecycle

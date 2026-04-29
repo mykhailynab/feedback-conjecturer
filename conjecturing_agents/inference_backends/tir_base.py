@@ -343,10 +343,6 @@ class TIRBackend(ABC):
                             partial_assistant_turn["reasoning_content"] = thinking
                     break
 
-                if not content and not tool_call_specs:
-                    termination_reason = "no_tokens"
-                    break
-
                 turn_record = TIRTurnRecord(
                     turn=turn_idx,
                     thinking=thinking,
@@ -418,8 +414,14 @@ class TIRBackend(ABC):
                     turns.append(turn_record)
                     continue  # next inference turn
 
-                # No tool calls → final answer.
                 turns.append(turn_record)
+
+                # the thinking field may still be there
+                if not content and not tool_call_specs:
+                    termination_reason = "no_tokens"
+                    break
+
+                # No tool calls -> final answer.
                 final_text = content
                 termination_reason = "final_answer"
                 break
@@ -451,6 +453,16 @@ class TIRBackend(ABC):
             messages_at_cutoff=messages_at_cutoff,
             partial_assistant_turn=partial_assistant_turn,
         )
+    
+        # TODO: New schema
+        # TIRSessionResult(
+        #     termination_reason=termination_reason,
+        #     elapsed_ms=elapsed_ms,
+        #     exception=exception_text,  # should contain the full traceback
+        #     incomplete=incomplete,
+        #     conversation_history=...,  # contains the system + user prompts, assistant messages, tool calls, etc.
+        #     partial_assistant_message=...,  # contains the last partial assistant turn that was interrupted for any possible reason (not only token_limit). Note that it's possible that the model was interrupted during thinking. In this case, the partial_assistant_message would contain only reasoning_content, content and tool calls will be empty.
+        # )
 
     # ------------------------------------------------------------------
     # Lifecycle

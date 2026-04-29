@@ -407,6 +407,25 @@ def _build_output_record(
     }
     return out
 
+    # TODO: new schema
+    out: Dict[str, Any] = {
+        "problem_id": record.get("problem_id"),
+        "attempt": record.get("attempt"),
+        "conjecture_formalization_status": record.get("status"),
+        "required_abbrev_name": record.get("required_abbrev_name"),
+        "formalized_abbrev_declaration": record.get("final_abbrev_declaration"),
+        "proved_lean": proved_lean,
+        "negated_lean": negated_lean,
+        "proved": proved,
+        "disproved": disproved,
+        "token_limit_triggered": ...,
+        "informal_proof_used": informal_proof_text is not None,
+        "informal_proof_text": informal_proof_text,
+        "informal_result": ...,
+        "proof_result": _result_to_dict(proof_result) if proof_result is not None else None,
+        "disproof_result": _result_to_dict(disproof_result) if disproof_result is not None else None,
+    }
+
 
 def _error_record(record: Dict[str, Any], error_type: str, message: str) -> Dict[str, Any]:
     return {

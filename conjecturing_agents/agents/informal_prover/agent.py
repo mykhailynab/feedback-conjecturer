@@ -190,6 +190,12 @@ class InformalProverAgent:
             turns=turns_as_dicts,
             exception=session_result.exception,
         )
+    
+        # TODO: new schema
+        InformalProverResult(
+            elapsed_ms=elapsed_ms,
+            session_result=..., # we add this instead of the others
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
