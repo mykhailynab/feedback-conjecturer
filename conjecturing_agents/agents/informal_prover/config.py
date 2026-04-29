@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from conjecturing_agents.inference_backends.tir_base import TIRSessionResult
+
 from conjecturing_agents.tool_calling_backends.jupyter import JupyterKernelConfig
 
 from .prompts import (
@@ -50,12 +52,7 @@ class InformalProverResult:
     # The generated informal certification proof text.
     proof_text: str
 
-    # "final_answer" | "max_turns_exhausted" | "deadline_exceeded" |
-    # "no_tokens" | "exception:..."
-    termination_reason: str
-
     elapsed_ms: int
 
-    # TIR turn records (thinking, content, tool_calls per turn).
-    turns: List[Dict[str, Any]] = field(default_factory=list)
-    exception: Optional[str] = None
+    # Full TIR session result (conversation_history, partial_assistant_turn, etc.).
+    session_result: Optional[TIRSessionResult] = None

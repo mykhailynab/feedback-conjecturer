@@ -7,6 +7,8 @@ from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from conjecturing_agents.inference_backends.tir_base import TIRSessionResult
+
 from conjecturing_agents.tool_calling_backends.lean4_compiler import LeanCompilerConfig
 from conjecturing_agents.tool_calling_backends.jupyter import JupyterKernelConfig
 
@@ -169,28 +171,17 @@ class TIRProverResult:
 
     # "proved" | "final_answer" | "max_turns_exhausted" | "deadline_exceeded" |
     # "stop_event" | "no_tokens" | "exception:..." | "cancelled"
+    # Agent-level termination reason — NOT a pass-through from the session.
     termination_reason: str
 
     # Full Lean file that compiled successfully ([OK] from the lean tool), or "".
     proved_lean: str
 
-    turns_used: int    # total TIR turns (each tool call + assistant response = 1 turn)
     elapsed_ms: int
 
-    turns: List[Dict[str, Any]] = field(default_factory=list)
-    exception: Optional[str] = None
+    # Mirror of session_result.token_limit_triggered for uniform access
+    # via the ProverResult union (GoedelProverResult has the same field).
+    token_limit_triggered: bool = False
 
-    # ------------------------------------------------------------------ #
-    # Scheduler-compatibility fields (mirror GoedelProverResult layout so
-    # the existing scheduler and _extract_resume_state work unchanged).
-    # ------------------------------------------------------------------ #
-    incomplete: bool = False
-    total_context_tokens: int = 0
-    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
-    partial_response: str = ""
-
-    # Partial assistant turn that was in progress when the stream was
-    # interrupted (e.g. by the token limit).  Logged for debugging but not
-    # used for resume — TIR always restarts from the beginning of the
-    # interrupted turn.
-    partial_assistant_turn: Optional[Dict[str, Any]] = None
+    # Full TIR session result (conversation_history, partial_assistant_turn, etc.).
+    session_result: Optional[TIRSessionResult] = None

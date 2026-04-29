@@ -90,24 +90,24 @@ class TIRTurnRecord:
 class TIRSessionResult:
     """Result returned by run_session()."""
 
-    final_text: str
-    turns: List[TIRTurnRecord]
     termination_reason: str
     elapsed_ms: int
     exception: Optional[str] = None
     # Optional throughput fields (populated by backends that track tokens)
     total_output_tokens: Optional[int] = None
     total_generation_ms: Optional[int] = None
-    # Set to True when the session was stopped by the token limit.
-    # messages_at_cutoff holds the full message list at the point of cutoff
-    # so the caller can resume the session in a later run.
-    incomplete: bool = False
-    messages_at_cutoff: List[Dict[str, Any]] = field(default_factory=list)
+    # True when the session was stopped by the token limit.
+    token_limit_triggered: bool = False
+    # Full message list (system + user + assistant + tool).  ALWAYS populated,
+    # not just on token-limit cutoff.
+    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
     # Partial assistant turn in progress when the stream was interrupted
-    # (thinking + content accumulated before the cutoff fired).  Separate from
-    # messages_at_cutoff so callers that build a resume conversation do not
-    # need to strip it out themselves.
+    # (by ANY reason: token_limit, deadline_exceeded, stop_event).  Contains
+    # {role, content, reasoning_content?}.  Separate from conversation_history
+    # so callers that build a resume conversation do not need to strip it out.
     partial_assistant_turn: Optional[Dict[str, Any]] = None
+    # Convenience: content of the last assistant message (empty if no final answer).
+    final_text: str = ""
 
 
 # Callable type for a tool handler: receives tool name + arguments, returns string.
@@ -234,8 +234,7 @@ class TIRBackend(ABC):
         termination_reason = "unknown"
         exception_text: Optional[str] = None
         final_text = ""
-        incomplete = False
-        messages_at_cutoff: List[Dict[str, Any]] = []
+        token_limit_triggered = False
         partial_assistant_turn: Optional[Dict[str, Any]] = None
 
         self._log_event("tir_session_start", {
@@ -264,8 +263,7 @@ class TIRBackend(ABC):
                     })
                     if current_tokens >= cfg.token_limit:
                         termination_reason = "token_limit"
-                        incomplete = True
-                        messages_at_cutoff = list(messages)
+                        token_limit_triggered = True
                         break
 
                 # Increment seed per turn for diversity across turns.
@@ -320,8 +318,7 @@ class TIRBackend(ABC):
                                 gen_tokens = self.count_tokens_text(thinking + content)
                                 if turn_prompt_tokens + gen_tokens >= cfg.token_limit:
                                     termination_reason = "token_limit"
-                                    incomplete = True
-                                    messages_at_cutoff = list(messages)
+                                    token_limit_triggered = True
                                     stream_interrupted = True
                                     break
 
@@ -330,9 +327,9 @@ class TIRBackend(ABC):
                     termination_reason = f"exception:{type(exc).__name__}"
                     break
 
-                if stream_interrupted and termination_reason == "token_limit":
+                if stream_interrupted:
                     # Record the partial assistant turn for logging/debugging.
-                    # Stored separately from messages_at_cutoff so callers that
+                    # Stored separately from conversation_history so callers that
                     # build a resume conversation do not need to strip it out.
                     if thinking or content:
                         partial_assistant_turn = {
@@ -444,25 +441,14 @@ class TIRBackend(ABC):
         })
 
         return TIRSessionResult(
-            final_text=final_text,
-            turns=turns,
             termination_reason=termination_reason,
             elapsed_ms=elapsed_ms,
             exception=exception_text,
-            incomplete=incomplete,
-            messages_at_cutoff=messages_at_cutoff,
+            token_limit_triggered=token_limit_triggered,
+            conversation_history=list(messages),
             partial_assistant_turn=partial_assistant_turn,
+            final_text=final_text,
         )
-    
-        # TODO: New schema
-        # TIRSessionResult(
-        #     termination_reason=termination_reason,
-        #     elapsed_ms=elapsed_ms,
-        #     exception=exception_text,  # should contain the full traceback
-        #     incomplete=incomplete,
-        #     conversation_history=...,  # contains the system + user prompts, assistant messages, tool calls, etc.
-        #     partial_assistant_message=...,  # contains the last partial assistant turn that was interrupted for any possible reason (not only token_limit). Note that it's possible that the model was interrupted during thinking. In this case, the partial_assistant_message would contain only reasoning_content, content and tool calls will be empty.
-        # )
 
     # ------------------------------------------------------------------
     # Lifecycle

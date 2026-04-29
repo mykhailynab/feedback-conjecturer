@@ -83,14 +83,16 @@ def _run_prove_attempts(
     initial_messages: Optional[List[Dict[str, Any]]] = None,
     initial_partial_response: str = "",
     informal_proof: Optional[str] = None,
-) -> ProverResult:
+) -> List[ProverResult]:
     """Run up to ``retries`` proof attempts, stopping as soon as one succeeds.
+
+    Returns ALL attempt results (not just the last one).
 
     ``initial_messages`` and ``initial_partial_response`` are used only for
     retry 0 (resuming a saved incomplete session).  Subsequent retries always
     start fresh with a new seed.
     """
-    last_result: Optional[ProverResult] = None
+    results: List[ProverResult] = []
     for i in range(retries):
         if stop_event is not None and stop_event.is_set():
             break
@@ -106,11 +108,11 @@ def _run_prove_attempts(
             partial_response=initial_partial_response if i == 0 else "",
             informal_proof=informal_proof,
         )
-        last_result = result
+        results.append(result)
         if result.proved:
             break
-    assert last_result is not None
-    return last_result
+    assert len(results) > 0
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -126,11 +128,16 @@ def _extract_resume_state(
     Pulls the saved conversation history and partial response from the
     ``proof_result`` or ``disproof_result`` sub-dict of an incomplete record.
     Returns ``(None, "")`` when there is nothing to resume from.
+
+    Supports both schema v1 (conversation_history at top level of sub-dict)
+    and v2 (inside session_result).
     """
     if incomplete_result is None:
         return None, ""
-    sub: Dict[str, Any] = incomplete_result.get(direction, {})
-    msgs = sub.get("conversation_history", None)
+    sub: Dict[str, Any] = incomplete_result.get(direction) or {}
+    # v2: conversation_history inside session_result
+    session = sub.get("session_result") or {}
+    msgs = session.get("conversation_history") or sub.get("conversation_history")
     partial = sub.get("partial_response", "")
     return msgs, partial
 
@@ -150,6 +157,7 @@ def process_record_sequential(
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
     informal_proof: Optional[str] = None,
+    informal_result: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Prove only (no disproof).  Returns the result dict to be written to JSONL.
@@ -167,7 +175,7 @@ def process_record_sequential(
 
     init_msgs, init_partial = _extract_resume_state(incomplete_result, "proof_result")
     meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
-    proof_result = _run_prove_attempts(
+    all_proof_results = _run_prove_attempts(
         proof_agent, proof_backend, proved_lean,
         base_seed=base_seed,
         retries=proof_retries,
@@ -183,8 +191,8 @@ def process_record_sequential(
         record,
         proved_lean=proved_lean,
         negated_lean=None,
-        proof_result=proof_result,
-        disproof_result=None,
+        all_proof_results=all_proof_results,
+        informal_result=informal_result,
         informal_proof_text=informal_proof,
     )
 
@@ -203,6 +211,7 @@ def process_record_sequential_with_disproof(
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
     informal_proof: Optional[str] = None,
+    informal_result: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Run proof first; if every retry fails, run disproof in the same thread.
@@ -221,7 +230,7 @@ def process_record_sequential_with_disproof(
 
     init_proof_msgs, init_proof_partial = _extract_resume_state(incomplete_result, "proof_result")
     meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
-    proof_result = _run_prove_attempts(
+    all_proof_results = _run_prove_attempts(
         proof_agent, proof_backend, proved_lean,
         base_seed=base_seed,
         retries=proof_retries,
@@ -232,10 +241,11 @@ def process_record_sequential_with_disproof(
         initial_partial_response=init_proof_partial,
         informal_proof=informal_proof,
     )
+    best_proof = all_proof_results[-1]
 
-    # If proof is still incomplete (token-limited), skip disproof for now.
-    disproof_result: Optional[ProverResult] = None
-    if not proof_result.proved and not proof_result.token_limit_triggered:
+    # If proof is still token-limited, skip disproof for now.
+    all_disproof_results: Optional[List[ProverResult]] = None
+    if not best_proof.proved and not best_proof.token_limit_triggered:
         try:
             negated_lean = negate_theorem_statement(proved_lean)
         except Exception as exc:
@@ -244,7 +254,7 @@ def process_record_sequential_with_disproof(
         # Resume disproof only if the prior run had one; otherwise start fresh.
         init_dis_msgs, init_dis_partial = _extract_resume_state(incomplete_result, "disproof_result")
         dis_meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
-        disproof_result = _run_prove_attempts(
+        all_disproof_results = _run_prove_attempts(
             disproof_agent, disproof_backend, negated_lean,
             base_seed=(base_seed + 0x10000) & 0x7FFFFFFF,
             retries=disproof_retries,
@@ -258,8 +268,9 @@ def process_record_sequential_with_disproof(
             record,
             proved_lean=proved_lean,
             negated_lean=negated_lean,
-            proof_result=proof_result,
-            disproof_result=disproof_result,
+            all_proof_results=all_proof_results,
+            all_disproof_results=all_disproof_results,
+            informal_result=informal_result,
             informal_proof_text=informal_proof,
         )
 
@@ -267,8 +278,8 @@ def process_record_sequential_with_disproof(
         record,
         proved_lean=proved_lean,
         negated_lean=None,
-        proof_result=proof_result,
-        disproof_result=None,
+        all_proof_results=all_proof_results,
+        informal_result=informal_result,
         informal_proof_text=informal_proof,
     )
 
@@ -287,6 +298,7 @@ def process_record_parallel(
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
     informal_proof: Optional[str] = None,
+    informal_result: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Run proof and disproof concurrently.  The first to succeed signals the
@@ -314,13 +326,13 @@ def process_record_parallel(
     init_proof_msgs, init_proof_partial = _extract_resume_state(incomplete_result, "proof_result")
     init_dis_msgs, init_dis_partial = _extract_resume_state(incomplete_result, "disproof_result")
 
-    proof_result: Optional[ProverResult] = None
-    disproof_result: Optional[ProverResult] = None
+    all_proof_results: Optional[List[ProverResult]] = None
+    all_disproof_results: Optional[List[ProverResult]] = None
 
     def run_proof() -> None:
-        nonlocal proof_result
+        nonlocal all_proof_results
         meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
-        proof_result = _run_prove_attempts(
+        all_proof_results = _run_prove_attempts(
             proof_agent, proof_backend, proved_lean,
             base_seed=base_seed,
             retries=proof_retries,
@@ -332,13 +344,13 @@ def process_record_parallel(
             initial_partial_response=init_proof_partial,
             informal_proof=informal_proof,
         )
-        if proof_result.proved:
+        if all_proof_results[-1].proved:
             stop_disproof.set()
 
     def run_disproof() -> None:
-        nonlocal disproof_result
+        nonlocal all_disproof_results
         meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
-        disproof_result = _run_prove_attempts(
+        all_disproof_results = _run_prove_attempts(
             disproof_agent, disproof_backend, negated_lean,
             base_seed=(base_seed + 0x10000) & 0x7FFFFFFF,
             retries=disproof_retries,
@@ -349,7 +361,7 @@ def process_record_parallel(
             initial_messages=init_dis_msgs,
             initial_partial_response=init_dis_partial,
         )
-        if disproof_result.proved:
+        if all_disproof_results[-1].proved:
             stop_proof.set()
 
     proof_thread = threading.Thread(target=run_proof, daemon=True)
@@ -363,8 +375,9 @@ def process_record_parallel(
         record,
         proved_lean=proved_lean,
         negated_lean=negated_lean,
-        proof_result=proof_result,
-        disproof_result=disproof_result,
+        all_proof_results=all_proof_results,
+        all_disproof_results=all_disproof_results,
+        informal_result=informal_result,
         informal_proof_text=informal_proof,
     )
 
@@ -378,37 +391,23 @@ def _build_output_record(
     *,
     proved_lean: str,
     negated_lean: Optional[str],
-    proof_result: Optional[ProverResult],
-    disproof_result: Optional[ProverResult],
+    all_proof_results: Optional[List[ProverResult]] = None,
+    all_disproof_results: Optional[List[ProverResult]] = None,
+    informal_result: Optional[Any] = None,
     informal_proof_text: Optional[str] = None,
 ) -> Dict[str, Any]:
-    proved = proof_result.proved if proof_result is not None else False
-    disproved = disproof_result.proved if disproof_result is not None else False
+    best_proof = all_proof_results[-1] if all_proof_results else None
+    best_disproof = all_disproof_results[-1] if all_disproof_results else None
 
-    incomplete = (
-        (proof_result is not None and proof_result.token_limit_triggered) or
-        (disproof_result is not None and disproof_result.token_limit_triggered)
+    proved = best_proof.proved if best_proof is not None else False
+    disproved = best_disproof.proved if best_disproof is not None else False
+
+    token_limit_triggered = (
+        (best_proof is not None and best_proof.token_limit_triggered) or
+        (best_disproof is not None and best_disproof.token_limit_triggered)
     )
     out: Dict[str, Any] = {
-        "problem_id": record.get("problem_id"),
-        "attempt": record.get("attempt"),
-        "status": record.get("status"),
-        "required_abbrev_name": record.get("required_abbrev_name"),
-        "final_abbrev_declaration": record.get("final_abbrev_declaration"),
-        "proved_lean": proved_lean,
-        "negated_lean": negated_lean,
-        "proved": proved,
-        "disproved": disproved,
-        "incomplete": incomplete,
-        "informal_proof_used": informal_proof_text is not None,
-        "informal_proof_text": informal_proof_text,
-        "proof_result": _result_to_dict(proof_result) if proof_result is not None else None,
-        "disproof_result": _result_to_dict(disproof_result) if disproof_result is not None else None,
-    }
-    return out
-
-    # TODO: new schema
-    out: Dict[str, Any] = {
+        "schema_version": 2,
         "problem_id": record.get("problem_id"),
         "attempt": record.get("attempt"),
         "conjecture_formalization_status": record.get("status"),
@@ -418,28 +417,31 @@ def _build_output_record(
         "negated_lean": negated_lean,
         "proved": proved,
         "disproved": disproved,
-        "token_limit_triggered": ...,
+        "token_limit_triggered": token_limit_triggered,
         "informal_proof_used": informal_proof_text is not None,
         "informal_proof_text": informal_proof_text,
-        "informal_result": ...,
-        "proof_result": _result_to_dict(proof_result) if proof_result is not None else None,
-        "disproof_result": _result_to_dict(disproof_result) if disproof_result is not None else None,
+        "informal_result": _result_to_dict(informal_result) if informal_result is not None else None,
+        "all_proof_results": [_result_to_dict(r) for r in all_proof_results] if all_proof_results else None,
+        "all_disproof_results": [_result_to_dict(r) for r in all_disproof_results] if all_disproof_results else None,
     }
+    return out
 
 
 def _error_record(record: Dict[str, Any], error_type: str, message: str) -> Dict[str, Any]:
     return {
+        "schema_version": 2,
         "problem_id": record.get("problem_id"),
         "attempt": record.get("attempt"),
-        "status": record.get("status"),
+        "conjecture_formalization_status": record.get("status"),
         "required_abbrev_name": record.get("required_abbrev_name"),
-        "final_abbrev_declaration": record.get("final_abbrev_declaration"),
+        "formalized_abbrev_declaration": record.get("final_abbrev_declaration"),
         "proved_lean": None,
         "negated_lean": None,
         "proved": False,
         "disproved": False,
-        "proof_result": None,
-        "disproof_result": None,
+        "token_limit_triggered": False,
+        "all_proof_results": None,
+        "all_disproof_results": None,
         "error": {"type": error_type, "message": message, "traceback": traceback.format_exc()},
     }
 
@@ -564,18 +566,19 @@ class ProveFormalizationsScheduler:
 
         for rec in skippable:
             on_result({
+                "schema_version": 2,
                 "problem_id": rec.get("problem_id"),
                 "attempt": rec.get("attempt"),
-                "status": rec.get("status"),
+                "conjecture_formalization_status": rec.get("status"),
                 "required_abbrev_name": rec.get("required_abbrev_name"),
-                "final_abbrev_declaration": rec.get("final_abbrev_declaration"),
+                "formalized_abbrev_declaration": rec.get("final_abbrev_declaration"),
                 "proved_lean": None,
                 "negated_lean": None,
                 "proved": False,
                 "disproved": False,
-                "incomplete": False,
-                "proof_result": None,
-                "disproof_result": None,
+                "token_limit_triggered": False,
+                "all_proof_results": None,
+                "all_disproof_results": None,
                 "skipped": True,
                 "skip_reason": f"status={rec.get('status')}",
             })
@@ -591,6 +594,7 @@ class ProveFormalizationsScheduler:
 
             # Generate informal proof if enabled.
             informal_proof: Optional[str] = None
+            informal_result = None
             if self._informal_prover is not None:
                 problem_text = self._problem_text_by_id.get(str(problem_id), "")
                 solution_trace = self._attempt_trace_by_key.get((str(problem_id), attempt), "")
@@ -634,6 +638,7 @@ class ProveFormalizationsScheduler:
                     token_limit=cfg.limit_prover_tokens,
                     incomplete_result=saved,
                     informal_proof=informal_proof,
+                    informal_result=informal_result,
                 )
             elif cfg.enable_sequential_disproof:
                 assert self._disproof_agent is not None
@@ -651,6 +656,7 @@ class ProveFormalizationsScheduler:
                     token_limit=cfg.limit_prover_tokens,
                     incomplete_result=saved,
                     informal_proof=informal_proof,
+                    informal_result=informal_result,
                 )
             else:
                 return process_record_sequential(
@@ -663,6 +669,7 @@ class ProveFormalizationsScheduler:
                     token_limit=cfg.limit_prover_tokens,
                     incomplete_result=saved,
                     informal_proof=informal_proof,
+                    informal_result=informal_result,
                 )
 
         with ThreadPoolExecutor(max_workers=outer_workers) as pool:

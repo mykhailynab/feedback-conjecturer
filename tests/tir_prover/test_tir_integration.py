@@ -297,26 +297,27 @@ class TestTIRProverTokenLimitAndResume:
             )
             _save_result(log_dir, result, "result_incomplete.json")
 
-            # The session should be incomplete (not proved)
-            assert result.incomplete, (
-                f"Expected incomplete=True with token_limit={prompt_tokens - 1}, "
+            # The session should be token_limit_triggered (not proved)
+            assert result.token_limit_triggered, (
+                f"Expected token_limit_triggered=True with token_limit={prompt_tokens - 1}, "
                 f"got termination_reason={result.termination_reason}"
             )
             assert not result.proved
             assert result.termination_reason == "token_limit"
 
             # conversation_history should be non-empty for resume
-            assert len(result.conversation_history) > 0, (
+            assert result.session_result is not None
+            assert len(result.session_result.conversation_history) > 0, (
                 "conversation_history should be non-empty for incomplete sessions"
             )
             # Should contain at least system + user messages
-            roles = [m["role"] for m in result.conversation_history]
+            roles = [m["role"] for m in result.session_result.conversation_history]
             assert "system" in roles
             assert "user" in roles
 
             # With a limit below the prompt size, generation never starts,
             # so partial_assistant_turn should be None.
-            assert result.partial_assistant_turn is None
+            assert result.session_result.partial_assistant_turn is None
 
             # Events should include a token_limit termination
             events = [
@@ -325,7 +326,7 @@ class TestTIRProverTokenLimitAndResume:
             ]
             done_events = [e for e in events if e["event"] == "tir_prover_session_done"]
             assert len(done_events) == 1
-            assert done_events[0]["incomplete"] is True
+            assert done_events[0]["token_limit_triggered"] is True
 
         finally:
             agent.close()
@@ -353,10 +354,11 @@ class TestTIRProverTokenLimitAndResume:
             )
             _save_result(log_dir, result_1, "result_phase1.json")
 
-            assert result_1.incomplete, (
-                f"Phase 1 should be incomplete, got {result_1.termination_reason}"
+            assert result_1.token_limit_triggered, (
+                f"Phase 1 should be token_limit_triggered, got {result_1.termination_reason}"
             )
-            assert len(result_1.conversation_history) > 0
+            assert result_1.session_result is not None
+            assert len(result_1.session_result.conversation_history) > 0
 
             # --- Phase 2: resume with a much higher token limit ---
             events_path_2 = log_dir / "events_phase2.jsonl"
@@ -368,13 +370,13 @@ class TestTIRProverTokenLimitAndResume:
                 seed=42,
                 event_logger=event_logger_2,
                 token_limit=0,  # unlimited
-                initial_messages=result_1.conversation_history,
+                initial_messages=result_1.session_result.conversation_history,
             )
             _save_result(log_dir, result_2, "result_phase2.json")
 
-            # The resumed session should complete (proved or at least not incomplete)
-            assert not result_2.incomplete, (
-                f"Phase 2 should not be incomplete, got {result_2.termination_reason}"
+            # The resumed session should complete (proved or at least not token_limit_triggered)
+            assert not result_2.token_limit_triggered, (
+                f"Phase 2 should not be token_limit_triggered, got {result_2.termination_reason}"
             )
 
             # Verify phase 2 events include a session_start with resuming=True
@@ -410,8 +412,8 @@ class TestTIRProverTokenLimitAndResume:
             )
             _save_result(log_dir, result_1, "result_phase1.json")
 
-            assert result_1.incomplete, (
-                f"Phase 1 should be incomplete, got {result_1.termination_reason}"
+            assert result_1.token_limit_triggered, (
+                f"Phase 1 should be token_limit_triggered, got {result_1.termination_reason}"
             )
 
             # Phase 2: unlimited
@@ -424,7 +426,7 @@ class TestTIRProverTokenLimitAndResume:
                 seed=42,
                 event_logger=event_logger,
                 token_limit=0,
-                initial_messages=result_1.conversation_history,
+                initial_messages=result_1.session_result.conversation_history,
             )
             _save_result(log_dir, result_2, "result_final.json")
 
@@ -463,20 +465,21 @@ class TestTIRProverResultLogging:
             assert isinstance(result.proved, bool)
             assert isinstance(result.termination_reason, str)
             assert result.termination_reason != ""
-            assert isinstance(result.turns_used, int)
-            assert result.turns_used > 0
             assert isinstance(result.elapsed_ms, int)
             assert result.elapsed_ms > 0
-            assert isinstance(result.turns, list)
-            assert len(result.turns) > 0
-            assert result.exception is None
 
-            # Each turn should have expected keys
-            for turn in result.turns:
-                assert "turn" in turn
-                assert "reasoning_content" in turn
-                assert "content" in turn
-                assert "tool_calls" in turn
+            # session_result should be populated
+            assert result.session_result is not None
+            assert isinstance(result.session_result.conversation_history, list)
+            assert len(result.session_result.conversation_history) > 0
+            assert result.session_result.exception is None
+
+            # conversation_history should contain assistant messages with tool_calls
+            assistant_msgs = [
+                m for m in result.session_result.conversation_history
+                if m.get("role") == "assistant"
+            ]
+            assert len(assistant_msgs) > 0
 
         finally:
             agent.close()

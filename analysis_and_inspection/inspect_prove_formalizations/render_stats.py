@@ -32,14 +32,20 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
 
     # ---- Records overview (from results file) ----
     n_total    = len(results)
-    n_success  = sum(1 for r in results.values() if r.get("status") == "success")
+    def _status(r: Dict) -> str:
+        return r.get("conjecture_formalization_status", r.get("status", ""))
+
+    def _is_token_limited(r: Dict) -> bool:
+        return bool(r.get("token_limit_triggered", r.get("incomplete", False)))
+
+    n_success  = sum(1 for r in results.values() if _status(r) == "success")
     n_skipped  = sum(1 for r in results.values() if r.get("skipped"))
-    n_status_failed = sum(1 for r in results.values() if r.get("status") == "failed")
+    n_status_failed = sum(1 for r in results.values() if _status(r) == "failed")
     n_proved   = sum(1 for r in results.values() if r.get("proved"))
     n_disproved = sum(1 for r in results.values() if r.get("disproved"))
     n_incomplete = sum(
         1 for r in results.values()
-        if r.get("incomplete") and not r.get("proved") and not r.get("disproved")
+        if _is_token_limited(r) and not r.get("proved") and not r.get("disproved")
     )
     n_inconclusive = n_success - n_proved - n_disproved - n_incomplete
 
@@ -102,29 +108,20 @@ def render_stats(sessions: List[ProverSession], results: Dict[Tuple, Dict]) -> s
     _round_dist("Rounds used (complete proof sessions)", [s for s in complete if s.checking == "proof"])
     _round_dist("Rounds used (complete disproof sessions)", [s for s in complete if s.checking == "disproof"])
 
-    # ---- Token budget (incomplete sessions) ----
+    # ---- Token budget (token-limited sessions) ----
     token_limited = [
         r for r in results.values()
-        if r.get("incomplete") and not r.get("proved") and not r.get("disproved")
+        if _is_token_limited(r) and not r.get("proved") and not r.get("disproved")
     ]
     if token_limited:
-        ctx_tokens = [
-            (r.get("proof_result") or {}).get("total_context_tokens", 0)
-            for r in token_limited
-            if (r.get("proof_result") or {}).get("total_context_tokens")
-        ]
-        if ctx_tokens:
-            lines.append("")
-            lines.append(bold("  Token budget (incomplete / token-limited sessions)"))
-            lines.append(hline("─"))
-            lines.append(f"  {'Incomplete sessions:':<44} {len(token_limited)}")
-            lines.append(f"  {'  with context token info:':<44} {len(ctx_tokens)}")
-            lines.append(f"  {'  max total_context_tokens:':<44} {max(ctx_tokens)}")
-            lines.append(f"  {'  median total_context_tokens:':<44} {sorted(ctx_tokens)[len(ctx_tokens)//2]}")
-            token_limits = [s.token_limit for s in sessions if s.token_limit > 0]
-            if token_limits:
-                lines.append(f"  {'  token_limit used (from events):':<44} {token_limits[0]}"
-                              + (dim("  (all sessions)") if len(set(token_limits)) == 1 else ""))
+        lines.append("")
+        lines.append(bold("  Token budget (token-limited sessions)"))
+        lines.append(hline("─"))
+        lines.append(f"  {'Token-limited sessions:':<44} {len(token_limited)}")
+        token_limits = [s.token_limit for s in sessions if s.token_limit > 0]
+        if token_limits:
+            lines.append(f"  {'  token_limit used (from events):':<44} {token_limits[0]}"
+                          + (dim("  (all sessions)") if len(set(token_limits)) == 1 else ""))
 
     # ---- Lean compilation results ----
     all_rounds = [r for s in complete for r in s.rounds]

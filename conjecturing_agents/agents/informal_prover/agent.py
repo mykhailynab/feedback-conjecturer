@@ -17,7 +17,6 @@ calls each have their own isolated Python environment.
 """
 from __future__ import annotations
 
-import dataclasses
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -173,11 +172,9 @@ class InformalProverAgent:
         # Build result
         # ------------------------------------------------------------------ #
         elapsed_ms = int((time.time() - t0) * 1000)
-        turns_as_dicts = [dataclasses.asdict(t) for t in session_result.turns]
 
         _log("informal_prover_session_done", {
             "termination_reason": session_result.termination_reason,
-            "turns_used": len(session_result.turns),
             "elapsed_ms": elapsed_ms,
             "proof_chars": len(session_result.final_text),
             "exception": session_result.exception,
@@ -185,16 +182,8 @@ class InformalProverAgent:
 
         return InformalProverResult(
             proof_text=session_result.final_text,
-            termination_reason=session_result.termination_reason,
             elapsed_ms=elapsed_ms,
-            turns=turns_as_dicts,
-            exception=session_result.exception,
-        )
-    
-        # TODO: new schema
-        InformalProverResult(
-            elapsed_ms=elapsed_ms,
-            session_result=..., # we add this instead of the others
+            session_result=session_result,
         )
 
     # ------------------------------------------------------------------

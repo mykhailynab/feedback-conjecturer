@@ -199,9 +199,10 @@ class TestInformalProverBasic:
             _save_result(log_dir, result)
 
             assert result.proof_text != "", "Expected non-empty proof text"
-            assert result.exception is None
+            assert result.session_result is not None
+            assert result.session_result.exception is None
             assert result.elapsed_ms > 0
-            assert len(result.turns) > 0
+            assert len(result.session_result.conversation_history) > 0
         finally:
             agent.close()
             backend.close()
@@ -226,7 +227,8 @@ class TestInformalProverBasic:
             _save_result(log_dir, result)
 
             assert result.proof_text != "", "Expected non-empty proof text"
-            assert result.exception is None
+            assert result.session_result is not None
+            assert result.session_result.exception is None
             assert result.elapsed_ms > 0
             # The proof should mention the answer somewhere
             assert "-1" in result.proof_text, (
@@ -261,20 +263,23 @@ class TestInformalProverResultLogging:
 
             # Basic field checks
             assert isinstance(result.proof_text, str)
-            assert isinstance(result.termination_reason, str)
-            assert result.termination_reason != ""
             assert isinstance(result.elapsed_ms, int)
             assert result.elapsed_ms > 0
-            assert isinstance(result.turns, list)
-            assert len(result.turns) > 0
-            assert result.exception is None
 
-            # Each turn should have expected keys
-            for turn in result.turns:
-                assert "turn" in turn
-                assert "reasoning_content" in turn
-                assert "content" in turn
-                assert "tool_calls" in turn
+            # session_result should be populated
+            assert result.session_result is not None
+            assert isinstance(result.session_result.termination_reason, str)
+            assert result.session_result.termination_reason != ""
+            assert isinstance(result.session_result.conversation_history, list)
+            assert len(result.session_result.conversation_history) > 0
+            assert result.session_result.exception is None
+
+            # conversation_history should contain at least an assistant message
+            assistant_msgs = [
+                m for m in result.session_result.conversation_history
+                if m.get("role") == "assistant"
+            ]
+            assert len(assistant_msgs) > 0
 
         finally:
             agent.close()

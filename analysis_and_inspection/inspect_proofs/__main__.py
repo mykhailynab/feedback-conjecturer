@@ -30,6 +30,75 @@ KNOWN_REASONS = {
 }
 
 
+def _get_proof_result(rec: dict) -> dict | None:
+    """Return the best proof result from a v1 or v2 record."""
+    # v2: all_proof_results list (last entry is the best)
+    all_pr = rec.get("all_proof_results")
+    if all_pr and len(all_pr) > 0:
+        return all_pr[-1]
+    # v1: single proof_result
+    return rec.get("proof_result")
+
+
+def _extract_tool_names_from_turns(turns: list[dict]) -> set[str]:
+    """Extract tool names from v1-style turns list."""
+    names: set[str] = set()
+    for t in turns:
+        for tc in t.get("tool_calls", []):
+            names.add(tc.get("name", ""))
+    return names
+
+
+def _extract_tool_names_from_history(history: list[dict]) -> set[str]:
+    """Extract tool names from v2-style conversation_history."""
+    names: set[str] = set()
+    for msg in history:
+        for tc in msg.get("tool_calls", []):
+            names.add(tc.get("function", {}).get("name", ""))
+    return names
+
+
+def _get_turns_or_history(proof_result: dict) -> tuple[list[dict] | None, list[dict] | None]:
+    """Return (turns, conversation_history) from a proof result, whichever is available."""
+    session = proof_result.get("session_result") or {}
+    history = session.get("conversation_history")
+    turns = proof_result.get("turns")
+    return turns, history
+
+
+def _get_tool_names(proof_result: dict) -> set[str]:
+    """Extract tool names from a proof result (v1 or v2)."""
+    turns, history = _get_turns_or_history(proof_result)
+    if history:
+        return _extract_tool_names_from_history(history)
+    if turns:
+        return _extract_tool_names_from_turns(turns)
+    return set()
+
+
+def _get_n_turns(proof_result: dict) -> int:
+    """Get the number of assistant turns from a proof result (v1 or v2)."""
+    turns, history = _get_turns_or_history(proof_result)
+    if history:
+        return sum(1 for m in history if m.get("role") == "assistant")
+    if turns:
+        return len(turns)
+    return 0
+
+
+def _get_last_assistant_msg(proof_result: dict) -> dict | None:
+    """Get the last assistant turn/message from a proof result (v1 or v2)."""
+    turns, history = _get_turns_or_history(proof_result)
+    if history:
+        for msg in reversed(history):
+            if msg.get("role") == "assistant":
+                return msg
+        return None
+    if turns:
+        return turns[-1] if turns else None
+    return None
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--prove-results-path", type=str, required=True)
@@ -48,7 +117,7 @@ def main():
     term_reason_map: dict[tuple[str, int], str] = {}
     result_lines = open(args.prove_results_path, "r").readlines()
     total_attempts = len(result_lines)
-    incomplete_count = 0
+    token_limited_count = 0
     no_proof_result_count = 0
     skipped_count = 0
     skipped_is_null_count = 0
@@ -78,42 +147,50 @@ def main():
         rec = json.loads(line)
         rec_key = (rec["problem_id"], rec["attempt"])
         all_records[rec_key] = rec
-        term_reason = (rec.get("proof_result") or {}).get("termination_reason", "None")
+        proof_result = _get_proof_result(rec)
+        term_reason = (proof_result or {}).get("termination_reason", "None")
         term_reason_counts[term_reason] += 1
-        status_counts[rec["status"]] += 1
-        if rec['incomplete']:
-            incomplete_count += 1
-        if rec['proof_result'] is None:
+        status = rec.get("conjecture_formalization_status", rec.get("status", ""))
+        status_counts[status] += 1
+        if rec.get("token_limit_triggered", rec.get("incomplete", False)):
+            token_limited_count += 1
+        if proof_result is None:
             no_proof_result_count += 1
         else:
-            proof_result = rec['proof_result']
             n_proved += proof_result['proved']
             if proof_result['proved']:
                 proved_term_reason_counts[term_reason] += 1
-            called_lean_final = any(any(tc['name'] == "lean_final" for tc in t['tool_calls']) for t in proof_result['turns'])
+            tool_names = _get_tool_names(proof_result)
+            called_lean_final = "lean_final" in tool_names
             if called_lean_final:
                 called_lean_final_term_reason_counts[term_reason] += 1
             called_lean_final_count += called_lean_final
-            called_lean = any(any(tc['name'] == "lean" for tc in t['tool_calls']) for t in proof_result['turns'])
+            called_lean = "lean" in tool_names
             if called_lean:
                 called_lean_term_reason_counts[term_reason] += 1
             called_lean_count += called_lean
-            called_python = any(any(tc['name'] == "python" for tc in t['tool_calls']) for t in proof_result['turns'])
+            called_python = "python" in tool_names
             if called_python:
                 called_python_term_reason_counts[term_reason] += 1
             called_python_count += called_python
-            called_nothing = not called_lean and not called_lean and not called_lean_final
+            called_nothing = not called_lean and not called_lean_final
             called_nothing_count += called_nothing
             if called_nothing:
                 called_nothing_term_reason_counts[term_reason] += 1
-            if len(proof_result['turns']) == 0:
+            n_turns = _get_n_turns(proof_result)
+            if n_turns == 0:
                 n_zero_turns += 1
                 zero_turns_term_reason_counts[term_reason] += 1
 
         if term_reason == "no_tokens":
-            assert proof_result['turns'][-1]['content'] == ""
-            assert proof_result['turns'][-1]['tool_calls'] == []
-            last_thinking = proof_result['turns'][-1]['thinking']
+            last_msg = _get_last_assistant_msg(proof_result)
+            # v1: last turn has thinking/content/tool_calls fields
+            # v2: last assistant message has reasoning_content/content/tool_calls
+            last_thinking = (
+                last_msg.get("thinking", "")
+                or last_msg.get("reasoning_content", "")
+                or ""
+            ) if last_msg else ""
             if last_thinking.endswith("</tool_call>"):
                 unparsed_tool_call_count += 1
                 tool_call_start = last_thinking.find("<tool_call>")
@@ -124,7 +201,7 @@ def main():
                     if parsed_tcs:
                         thinking_tc_parsed_count += 1
                         thinking_tc_parsed_total += len(parsed_tcs)
-            elif len(tir_tok.encode(last_thinking)) > (16384 - 16):  # include buffer
+            elif last_thinking and len(tir_tok.encode(last_thinking)) > (16384 - 16):  # include buffer
                 no_tokens_limited_count += 1
             else:
                 no_tokens_other_reasons += 1
@@ -139,7 +216,7 @@ def main():
         else:
             skip_reason_counts[rec['skip_reason']] += 1
         term_reason_map[(rec["problem_id"], rec["attempt"])] = term_reason
-    print(f"{incomplete_count} / {total_attempts} are incomplete")
+    print(f"{token_limited_count} / {total_attempts} are token_limit_triggered")
     print(f"{no_proof_result_count} / {total_attempts} have no proof result")
     print()
     print(f"{skipped_is_null_count} / {total_attempts} where skipped is null")
@@ -198,10 +275,10 @@ def main():
 
     proof_tokens_no_turns = defaultdict(int)
     for k, rec in all_records.items():
-        proof_result = rec.get("proof_result") or {}
+        proof_result = _get_proof_result(rec) or {}
         if not proof_result:
             continue
-        if len(proof_result['turns']) == 0:
+        if _get_n_turns(proof_result) == 0:
             proof_tokens_no_turns[k] = proof_tokens_dict[k]
     if proof_tokens_no_turns:
         print(f"{min(proof_tokens_no_turns.values()) = }")

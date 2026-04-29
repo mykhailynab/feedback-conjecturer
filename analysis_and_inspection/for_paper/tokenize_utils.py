@@ -120,6 +120,14 @@ def goedel_session_tokens(
     return result
 
 
+def _get_best_proof_result(d: dict) -> dict | None:
+    """Return the best proof result from a v1 or v2 record."""
+    all_pr = d.get("all_proof_results")
+    if all_pr and len(all_pr) > 0:
+        return all_pr[-1]
+    return d.get("proof_result")
+
+
 def tir_session_tokens(
     results_path: Path,
     tokenizer,
@@ -144,15 +152,32 @@ def tir_session_tokens(
             if keys is not None and (pid, att) not in keys:
                 continue
             p.update(1)
-            pr = d.get("proof_result")
+            pr = _get_best_proof_result(d)
             if not pr:
                 result[(pid, att)] = 0
                 continue
+
+            # v2: conversation_history inside session_result
+            session = pr.get("session_result") or {}
+            history = session.get("conversation_history")
+            if history:
+                msgs = list(history)
+                if exclude_last_tool_call_result:
+                    # Remove the last tool result message(s)
+                    while msgs and msgs[-1].get("role") == "tool":
+                        msgs.pop()
+                tokens = tokenizer.apply_chat_template(
+                    msgs, tokenize=True, add_generation_prompt=False,
+                )
+                result[(pid, att)] = len(tokens)
+                continue
+
+            # v1 fallback: use turns
             turns = pr.get("turns") or []
             if not turns:
                 result[(pid, att)] = 0
                 continue
-            # NOTE: V1 schema hack
+            # NOTE: V1 schema hack — no system/user messages available
             parts = [d.get("proved_lean", "") or ""]
             for t in turns:
                 parts.append(t.get("thinking", "") or "")
@@ -227,24 +252,46 @@ def tir_proof_tokens(
             pid, att = d["problem_id"], d["attempt"]
             if keys is not None and (pid, att) not in keys:
                 continue
-            pr = d.get("proof_result")
+            pr = _get_best_proof_result(d)
             if not pr:
                 continue
-            turns = pr.get("turns") or []
-            if not turns:
-                continue
+
             last_lean_final = ""
             last_lean = ""
-            for t in turns:
-                for tc in t.get("tool_calls", []):
-                    name = tc.get("name", "")
-                    args = tc.get("arguments", {})
-                    code = args.get("code", "") if isinstance(args, dict) else str(args)
-                    if name == "lean_final":
-                        last_lean_final = code
-                    elif name == "lean":
-                        last_lean = code
+
+            # v2: conversation_history inside session_result
+            session = pr.get("session_result") or {}
+            history = session.get("conversation_history")
+            if history:
+                for msg in history:
+                    for tc in msg.get("tool_calls", []):
+                        name = tc.get("function", {}).get("name", "")
+                        args_str = tc.get("function", {}).get("arguments", "")
+                        try:
+                            args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                        except (json.JSONDecodeError, TypeError):
+                            args = {}
+                        code = args.get("code", "") if isinstance(args, dict) else str(args)
+                        if name == "lean_final":
+                            last_lean_final = code
+                        elif name == "lean":
+                            last_lean = code
+            else:
+                # v1 fallback: use turns
+                turns = pr.get("turns") or []
+                for t in turns:
+                    for tc in t.get("tool_calls", []):
+                        name = tc.get("name", "")
+                        args = tc.get("arguments", {})
+                        code = args.get("code", "") if isinstance(args, dict) else str(args)
+                        if name == "lean_final":
+                            last_lean_final = code
+                        elif name == "lean":
+                            last_lean = code
+
             code = last_lean_final or last_lean
+            if not code:
+                continue
             text = _proof_from_theorem(code)
             result[(pid, att)] = len(tokenizer.encode(text, add_special_tokens=False))
     return result

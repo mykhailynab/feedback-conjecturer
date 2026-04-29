@@ -29,7 +29,6 @@ isolated Python environment.
 """
 from __future__ import annotations
 
-import dataclasses
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -352,49 +351,22 @@ class TIRProverAgent:
         else:
             termination_reason = session_result.termination_reason
 
-        incomplete = session_result.incomplete
-
         _log("tir_prover_session_done", {
             "proved": proved,
             "termination_reason": termination_reason,
-            "turns_used": len(session_result.turns),
             "elapsed_ms": elapsed_ms,
-            "incomplete": incomplete,
+            "token_limit_triggered": session_result.token_limit_triggered,
             "exception": session_result.exception,
         })
-
-        turns_as_dicts = [dataclasses.asdict(t) for t in session_result.turns]
 
         return TIRProverResult(
             proved=proved,
             termination_reason=termination_reason,
             proved_lean=_state["proved_lean"],
-            turns_used=len(session_result.turns),
             elapsed_ms=elapsed_ms,
-            turns=turns_as_dicts,
-            exception=session_result.exception,
-            incomplete=incomplete,
-            # Save the full message list so the scheduler can resume the
-            # session via initial_messages in a subsequent --continue run.
-            conversation_history=session_result.messages_at_cutoff if incomplete else [],
-            # NOTE: not used in --continue
-            partial_assistant_turn=session_result.partial_assistant_turn,
+            token_limit_triggered=session_result.token_limit_triggered,
+            session_result=session_result,
         )
-    
-        # TODO: New schema
-        # TIRProverResult(
-        #     proved=proved,
-        #     termination_reason=termination_reason, # is NOT a pass-through for the session result. created separately
-        #     proved_lean=_state["proved_lean"],
-        #     # turns_used=...,  # remove this. Can be later calculated from session result.
-        #     elapsed_ms=elapsed_ms,
-        #     session_result=..., # add this field
-        #     # turns=turns_as_dicts,  # we remove this. messages should be dicts 
-        #     # exception=session_result.exception, # we remove this. we have this in the session result.
-        #     # incomplete=incomplete, # we remove this. we have this in the session result.
-        #     # conversation_history=session_result.messages_at_cutoff if incomplete else [], # we remove this. we have this in the session result.
-        #     # partial_assistant_turn=session_result.partial_assistant_turn, # we remove this. we have this in the session result.
-        # )
 
     # ------------------------------------------------------------------
     # Lifecycle

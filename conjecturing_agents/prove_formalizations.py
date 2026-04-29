@@ -43,7 +43,9 @@ def _is_decided(r: Dict[str, Any]) -> bool:
 
 
 def _is_incomplete(r: Dict[str, Any]) -> bool:
-    return bool(r.get("incomplete")) and not _is_decided(r)
+    return (
+        bool(r.get("token_limit_triggered")) or bool(r.get("incomplete"))
+    ) and not _is_decided(r)
 
 
 def main() -> None:

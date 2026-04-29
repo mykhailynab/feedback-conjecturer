@@ -39,16 +39,13 @@ def _prove_result_summary(r: dict) -> str:
         parts.append(green("proved"))
     elif r.get("disproved"):
         parts.append(red("disproved"))
-    elif r.get("incomplete"):
-        pr = r.get("proof_result") or {}
-        ctx = pr.get("total_context_tokens")
-        ctx_str = f"  ctx={ctx}" if ctx else ""
-        parts.append(yellow(f"incomplete{ctx_str}"))
+    elif r.get("token_limit_triggered", r.get("incomplete", False)):
+        parts.append(yellow("token_limit_triggered"))
     else:
         parts.append(dim("inconclusive"))
     if r.get("skipped"):
         parts.append(dim(f"skipped ({r.get('skip_reason', '?')})"))
-    status = r.get("status", "")
+    status = r.get("conjecture_formalization_status", r.get("status", ""))
     if status and status not in ("success",):
         parts.append(dim(f"status={status}"))
     return "prove_result: " + "  ".join(parts)
