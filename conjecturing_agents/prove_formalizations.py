@@ -91,20 +91,34 @@ def main() -> None:
         if existing_path.exists():
             existing = load_jsonl(existing_path)
             decided_results = [r for r in existing if _is_decided(r)]
-            decided_keys = {_record_key(r) for r in decided_results}
+            kept_keys = {_record_key(r) for r in decided_results}
+            # Optionally keep inconclusive results (not decided, not incomplete)
+            n_inconclusive_kept = 0
+            if cfg.resume_keep_inconclusive:
+                inconclusive = [
+                    r for r in existing
+                    if not _is_decided(r) and not _is_incomplete(r)
+                ]
+                decided_results.extend(inconclusive)
+                kept_keys.update(_record_key(r) for r in inconclusive)
+                n_inconclusive_kept = len(inconclusive)
             # subset of records_to_run that's incomplete
             incomplete_map = {
                 _record_key(r): r for r in existing if _is_incomplete(r)
             }
-            records_to_run = [r for r in records if _record_key(r) not in decided_keys]
+            records_to_run = [r for r in records if _record_key(r) not in kept_keys]
             if cfg.verbose:
                 n_incomplete = len(incomplete_map)
                 n_fresh = len(records_to_run) - n_incomplete
-                print(
+                parts = [
                     f"Loaded {len(existing)} existing results from {output_path}: "
-                    f"{len(decided_results)} decided, {n_incomplete} incomplete (resuming), "
-                    f"{n_fresh} new"
-                )
+                    f"{len(decided_results) - n_inconclusive_kept} decided",
+                ]
+                if n_inconclusive_kept:
+                    parts.append(f"{n_inconclusive_kept} inconclusive (kept)")
+                parts.append(f"{n_incomplete} incomplete (resuming)")
+                parts.append(f"{n_fresh} new")
+                print(", ".join(parts))
 
     total = len(records_to_run)
 

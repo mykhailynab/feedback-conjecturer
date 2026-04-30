@@ -325,7 +325,8 @@ screen -dmS prove_formalizations bash -c \
         --lean-project-dir /workspace/mathlib4 \
         --parallelism 6 \
         --limit-prover-tokens 262144 \
-        --continue &> prove_formalizations_tir_cot_llamacpp_noinformal_v2.log'
+        --continue \
+        --continue-keep-inconclusive &> prove_formalizations_tir_cot_llamacpp_noinformal_v2.log'
 screen -S monitor_prove tail -f prove_formalizations_tir_cot_llamacpp_noinformal_v2.log
 ```
 
@@ -357,11 +358,13 @@ screen -dmS prove_formalizations bash -c \
         --lean-project-dir /workspace/mathlib4 \
         --parallelism 12 \
         --limit-prover-tokens 262144 \
-        --continue &> prove_formalizations_tir_cot_llamacpp_noinformal_v2.log'
+        --continue \
+        --continue-keep-inconclusive &> prove_formalizations_tir_cot_llamacpp_noinformal_v2.log'
 screen -S monitor_prove tail -f prove_formalizations_tir_cot_llamacpp_noinformal_v2.log
 ```
 
 Whole dataset, strip thinking, add informal proof, fixed logging, hotfix tool calls, 2x max tokens, 16x turns, 3x time:
+NOTE: Even better logging to debug stalling GPU
 (4x 5000)
 ```sh
 mkdir logs/prove_nocot_informal_v2_schema
@@ -392,7 +395,8 @@ screen -dmS prove_formalizations bash -c \
         --lean-project-dir /workspace/mathlib4 \
         --parallelism 12 \
         --limit-prover-tokens 262144 \
-        --continue &> prove_formalizations_tir_nocot_llamacpp_informal_v2.log'
+        --continue \
+        --continue-keep-inconclusive &> prove_formalizations_tir_nocot_llamacpp_informal_v2.log'
 screen -S monitor_prove tail -f prove_formalizations_tir_nocot_llamacpp_informal_v2.log
 ```
 

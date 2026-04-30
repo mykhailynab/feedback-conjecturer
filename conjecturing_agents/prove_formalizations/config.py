@@ -81,6 +81,7 @@ class ProveFormalizationsConfig:
     parallelism: int = 4
     max_records: int = 0  # 0 = all
     resume: bool = False  # re-prove only undecided records
+    resume_keep_inconclusive: bool = False  # with --continue, keep inconclusive results
 
     # Logging
     verbose: bool = True
@@ -506,7 +507,18 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         default=ProveFormalizationsConfig.resume,
         help=(
             "Resume from an existing output file. Already-decided records "
-            "(proved or disproved) are kept; undecided records are re-run."
+            "(proved or disproved) are kept; inconclusive and incomplete "
+            "records are re-run. See --continue-keep-inconclusive."
+        ),
+    )
+    p.add_argument(
+        "--continue-keep-inconclusive",
+        dest="resume_keep_inconclusive",
+        action="store_true",
+        default=ProveFormalizationsConfig.resume_keep_inconclusive,
+        help=(
+            "When used with --continue, keep inconclusive results "
+            "(not proved, not disproved, not incomplete) instead of re-running them."
         ),
     )
     p.add_argument(
