@@ -62,7 +62,7 @@ class JupyterKernelConfig:
     recipient_name: str = "python"
     tool_name: str = "python"
 
-    ensure_last_print: bool = True
+    ensure_last_print: bool = False
     init_on_create: bool = True
     interrupt_on_timeout: bool = True
 
