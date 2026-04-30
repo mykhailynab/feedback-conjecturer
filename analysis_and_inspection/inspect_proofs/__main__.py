@@ -143,6 +143,10 @@ def main():
     thinking_tc_parsed_count = 0
     thinking_tc_parsed_total = 0
     no_tokens_other_reasons = 0
+    no_tokens_had_partial_assistant_turn = 0
+    no_tokens_no_assistant = 0
+    n_has_partial_assistant_turn = 0
+    has_partial_assistant_turn_term_reason_counts = defaultdict(int)
     for line in result_lines:
         rec = json.loads(line)
         rec_key = (rec["problem_id"], rec["attempt"])
@@ -182,29 +186,49 @@ def main():
                 n_zero_turns += 1
                 zero_turns_term_reason_counts[term_reason] += 1
 
+            session_result = proof_result['session_result']
+            conversation_history = session_result['conversation_history']
+            has_partial_assistant_turn = session_result['partial_assistant_turn'] is not None
+            if has_partial_assistant_turn:
+                n_has_partial_assistant_turn += 1
+                has_partial_assistant_turn_term_reason_counts[term_reason] += 1
+
         if term_reason == "no_tokens":
-            last_msg = _get_last_assistant_msg(proof_result)
-            # v1: last turn has thinking/content/tool_calls fields
-            # v2: last assistant message has reasoning_content/content/tool_calls
+            session = proof_result.get("session_result") or {}
+            last_msg = session.get('partial_assistant_turn') or {}
+            if last_msg is not None:
+                no_tokens_had_partial_assistant_turn += 1
+            else:
+                conversation_history = session.get("conversation_history")
+                for msg in reversed(conversation_history):
+                    if msg.get("role") == "assistant":
+                        last_msg = msg
+            if not last_msg:
+                assert len(conversation_history) == 2
+                assert [c['role'] for c in conversation_history] == ["system", "user"]
+                no_tokens_no_assistant += 1
             last_thinking = (
-                last_msg.get("thinking", "")
-                or last_msg.get("reasoning_content", "")
+                last_msg.get("reasoning_content", "")
                 or ""
             ) if last_msg else ""
             if last_thinking.endswith("</tool_call>"):
-                unparsed_tool_call_count += 1
-                tool_call_start = last_thinking.find("<tool_call>")
-                if tool_call_start == -1:
-                    unparsed_tool_call_no_start += 1
-                else:
-                    parsed_tcs = parse_tool_calls_from_thinking(last_thinking)
-                    if parsed_tcs:
-                        thinking_tc_parsed_count += 1
-                        thinking_tc_parsed_total += len(parsed_tcs)
-            elif last_thinking and len(tir_tok.encode(last_thinking)) > (16384 - 16):  # include buffer
+                if not last_msg.get('tool_calls'):
+                    unparsed_tool_call_count += 1
+                    tool_call_start = last_thinking.find("<tool_call>")
+                    if tool_call_start == -1:
+                        unparsed_tool_call_no_start += 1
+                    else:
+                        parsed_tcs = parse_tool_calls_from_thinking(last_thinking)
+                        if parsed_tcs:
+                            thinking_tc_parsed_count += 1
+                            thinking_tc_parsed_total += len(parsed_tcs)
+            elif last_thinking and len(tir_tok.encode(last_thinking)) > (32768 - 1024):  # include buffer
                 no_tokens_limited_count += 1
             else:
                 no_tokens_other_reasons += 1
+                # print(len(tir_tok.encode(last_thinking)))
+                # print(json.dumps(conversation_history + [last_msg]))
+                # raise SystemExit(0)
         if 'skipped' not in rec:
             skipped_is_null_count += 1
             non_skipped_keys.append(rec_key)
@@ -222,7 +246,6 @@ def main():
     print(f"{skipped_is_null_count} / {total_attempts} where skipped is null")
     print(f"{skipped_count} / {total_attempts} where skipped is true")
     print(f"{skip_reason_is_null} / {total_attempts} without a skip reason")
-    print(f"{skip_reason_is_null} / {total_attempts} without a skip reason")
     print()
     print(f"{called_lean_final_count} / {total_attempts} called lean_final")
     print(f"called_lean_final_term_reason_counts = {dict(called_lean_final_term_reason_counts)}")
@@ -236,16 +259,22 @@ def main():
     print(f"{n_zero_turns} / {total_attempts} had 0 turns")
     print(f"zero_turns_term_reason_counts = {dict(zero_turns_term_reason_counts)}")
     print()
-    print(f"{no_tokens_limited_count} / {term_reason_counts['no_tokens']} were token-limited")
+    print("When the term_reason was no_tokens:")
+    print(f"{no_tokens_had_partial_assistant_turn} / {term_reason_counts['no_tokens']} had partial assistant turns")
+    print(f"{no_tokens_limited_count} / {term_reason_counts['no_tokens']} were turn-token-limited")
     print(f"{unparsed_tool_call_count} / {term_reason_counts['no_tokens']} had unparsed tool calls")
     print(f"  {unparsed_tool_call_no_start} / {unparsed_tool_call_count} had no <tool_call> start tag")
     print(f"  {thinking_tc_parsed_count} / {unparsed_tool_call_count - unparsed_tool_call_no_start} were parseable ({thinking_tc_parsed_total} tool calls total)")
     print(f"{no_tokens_other_reasons} / {term_reason_counts['no_tokens']} had no tokens for other reasons")
+    print(f"  {no_tokens_no_assistant} / {no_tokens_other_reasons} where there's no assistant turn recorded at all")
     print()
     print(f"proved_term_reason_counts = {dict(proved_term_reason_counts)}")
     print(f"term_reason_counts = {dict(term_reason_counts)}")
     print(f"status_counts = {dict(status_counts)}")
     print(f"skip_reason_counts = {dict(skip_reason_counts)}")
+    print()
+    print(f"{n_has_partial_assistant_turn} / {total_attempts} had partial assistant turns")
+    print(f"  has_partial_assistant_turn_term_reason_counts = {dict(has_partial_assistant_turn_term_reason_counts)}")
     print()
 
     # raise SystemExit(0) 
@@ -258,20 +287,34 @@ def main():
     proof_tokens_dict = tir_session_tokens(args.prove_results_path, tir_tok, exclude_last_tool_call_result=True, keys=non_skipped_keys)
     assert len(proof_tokens_dict) == (total_attempts - skipped_count)
 
+    n_no_assistant = 0
+
     min_tokens = min([v for k, v in proof_tokens_dict.items() if v != 0])
     for k, v in proof_tokens_dict.items():
         rec = all_records[k]
-        proof_result = rec.get("proof_result") or {}
-        term_reason = proof_result.get("termination_reason", "None")
+        proof_result = rec['all_proof_results'][-1]
+        session_result = proof_result['session_result']
+        term_reason = session_result.get("termination_reason", "None")
+        conversation_history = session_result['conversation_history']
+        if session_result['partial_assistant_turn']:
+            conversation_history += [session_result['partial_assistant_turn']]
         if v == min_tokens:
-            print("Shortest non-zero attempt:", k)
+            print(f"Shortest non-zero attempt: {k} (min tokens: {min_tokens})")
             print(f"Term reason: {term_reason}")
-            # print(f"Turns: {proof_result['turns']}")
-        # if term_reason == "no_tokens":
-        #     assert proof_result['turns'][-1]['content'] == ""
-        #     assert proof_result['turns'][-1]['tool_calls'] == []
-        #     print(proof_result['turns'][-1]['thinking'])
-        #     print("==========================================================================================")
+            print("Number of turns:", len(conversation_history))
+            # print("Turns:", json.dumps(conversation_history))
+            # raise SystemExit(0)
+        if term_reason == "no_tokens":
+            if len(conversation_history) == 2:
+                assert [c['role'] for c in conversation_history] == ["system", "user"]
+                n_no_assistant += 1
+            # else:
+            #     print("Turns:", json.dumps(conversation_history))
+            #     raise SystemExit(0)
+
+    print()
+    print(f"{n_no_assistant} / {term_reason_counts['no_tokens']} had no tokens and no assistant responses")
+    print()
 
     proof_tokens_no_turns = defaultdict(int)
     for k, rec in all_records.items():

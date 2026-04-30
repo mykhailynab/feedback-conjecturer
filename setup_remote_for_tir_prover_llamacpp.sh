@@ -55,11 +55,12 @@ die()  { echo -e "${RED}ERROR: $*${NC}" >&2; exit 1; }
 # Paths / constants
 # ============================================================
 
+QUANT_VARIANT="Q6_K_XL"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 MATHLIB4_DIR="$PROJECT_DIR/mathlib4"
 MODEL_DIR="$PROJECT_DIR/unsloth/Qwen3.6-35B-A3B-GGUF"
-GGUF_FILENAME="Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf"
+GGUF_FILENAME="Qwen3.6-35B-A3B-UD-$QUANT_VARIANT.gguf"
 GGUF_PATH="$MODEL_DIR/$GGUF_FILENAME"
 MMPROJ_PATH="$MODEL_DIR/mmproj-F16.gguf"
 MODEL_ALIAS="unsloth/Qwen3.6-35B-A3B"
@@ -117,7 +118,7 @@ download_model() {
     hf download unsloth/Qwen3.6-35B-A3B-GGUF \
         --local-dir "$MODEL_DIR" \
         --include "*mmproj-F16*" \
-        --include "*UD-Q5_K_XL*" \
+        --include "*UD-$QUANT_VARIANT*" \
         >> "$GGUF_LOG" 2>&1 \
         || { echo "FAILED" >> "$GGUF_LOG"; return 1; }
     echo "done" >> "$GGUF_LOG"
