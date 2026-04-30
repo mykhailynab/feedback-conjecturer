@@ -114,8 +114,7 @@ def main() -> None:
                     f"Loaded {len(existing)} existing results from {output_path}: "
                     f"{len(decided_results) - n_inconclusive_kept} decided",
                 ]
-                if n_inconclusive_kept:
-                    parts.append(f"{n_inconclusive_kept} inconclusive (kept)")
+                parts.append(f"{n_inconclusive_kept} inconclusive (kept)")
                 parts.append(f"{n_incomplete} incomplete (resuming)")
                 parts.append(f"{n_fresh} new")
                 print(", ".join(parts))

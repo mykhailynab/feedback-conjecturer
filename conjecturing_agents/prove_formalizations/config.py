@@ -570,6 +570,7 @@ def parse_args_and_validate() -> ProveFormalizationsConfig:
         parallelism=args.parallelism,
         max_records=args.max_records,
         resume=args.resume,
+        resume_keep_inconclusive=args.resume_keep_inconclusive,
         verbose=args.verbose,
     )
     validate_cfg(cfg)
