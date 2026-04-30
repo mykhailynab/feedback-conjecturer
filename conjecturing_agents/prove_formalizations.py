@@ -62,22 +62,25 @@ def main() -> None:
     events_path = cfg.events_path or str(
         Path(output_path).parent / "prover_events.jsonl"
     )
-    event_logger = ProveFormalizationsLogger(events_path)
-
     tok_lock = threading.Lock()
     total_output_tokens = 0
     total_generation_ms = 0
 
-    def _intercepted_event_logger(event_type: str, payload: Any) -> None:
-        nonlocal total_output_tokens, total_generation_ms
-        if event_type == "raw_generation_done":
-            gen_toks = payload.get("generated_tokens")
-            elapsed = payload.get("elapsed_ms")
-            if gen_toks is not None and elapsed is not None and elapsed > 0:
-                with tok_lock:
-                    total_output_tokens += gen_toks
-                    total_generation_ms += elapsed
-        event_logger.log_event(event_type, payload)
+    class _TokenTrackingLogger(ProveFormalizationsLogger):
+        """Intercepts raw_generation_done events to track throughput."""
+
+        def log_event(self, event_type: str, payload: Any) -> None:
+            nonlocal total_output_tokens, total_generation_ms
+            if event_type == "raw_generation_done":
+                gen_toks = payload.get("generated_tokens")
+                elapsed = payload.get("elapsed_ms")
+                if gen_toks is not None and elapsed is not None and elapsed > 0:
+                    with tok_lock:
+                        total_output_tokens += gen_toks
+                        total_generation_ms += elapsed
+            super().log_event(event_type, payload)
+
+    event_logger = _TokenTrackingLogger(events_path)
 
     decided_results: List[Dict[str, Any]] = []
     incomplete_map: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
@@ -178,7 +181,7 @@ def main() -> None:
             )
             progress.update(1)
 
-        with ProveFormalizationsScheduler(cfg, event_logger=_intercepted_event_logger) as scheduler:
+        with ProveFormalizationsScheduler(cfg, event_logger=event_logger) as scheduler:
             scheduler.run(records_to_run, on_result=on_result, incomplete_map=incomplete_map)
 
     progress.close()

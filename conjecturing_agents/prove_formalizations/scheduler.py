@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 import threading
 import traceback
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -39,7 +40,7 @@ from conjecturing_agents.agents.tir_prover import (
     TIRProverAgent,
     TIRProverResult,
 )
-from conjecturing_agents.inference_backends.raw_base import RawBackend, EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import RawBackend, EventLogger
 from conjecturing_agents.inference_backends.tir_base import TIRBackend
 
 ProverAgent = Union[GoedelProverAgent, TIRProverAgent]
@@ -76,7 +77,7 @@ def _run_prove_attempts(
     *,
     base_seed: int,
     retries: int,
-    event_logger: Optional[EventLoggerFn],
+    event_logger: Optional[EventLogger],
     metadata: Dict[str, Any],
     stop_event: Optional[threading.Event] = None,
     token_limit: int = 0,
@@ -153,7 +154,7 @@ def process_record_sequential(
     proof_backend: ProverBackend,
     proof_retries: int,
     base_seed: int,
-    event_logger: Optional[EventLoggerFn],
+    event_logger: Optional[EventLogger],
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
     informal_proof: Optional[str] = None,
@@ -207,7 +208,7 @@ def process_record_sequential_with_disproof(
     proof_retries: int,
     disproof_retries: int,
     base_seed: int,
-    event_logger: Optional[EventLoggerFn],
+    event_logger: Optional[EventLogger],
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
     informal_proof: Optional[str] = None,
@@ -294,7 +295,7 @@ def process_record_parallel(
     proof_retries: int,
     disproof_retries: int,
     base_seed: int,
-    event_logger: Optional[EventLoggerFn],
+    event_logger: Optional[EventLogger],
     token_limit: int = 0,
     incomplete_result: Optional[Dict[str, Any]] = None,
     informal_proof: Optional[str] = None,
@@ -329,40 +330,64 @@ def process_record_parallel(
     all_proof_results: Optional[List[ProverResult]] = None
     all_disproof_results: Optional[List[ProverResult]] = None
 
+    uid = uuid.uuid4().hex[:8]
+
     def run_proof() -> None:
         nonlocal all_proof_results
-        meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
-        all_proof_results = _run_prove_attempts(
-            proof_agent, proof_backend, proved_lean,
-            base_seed=base_seed,
-            retries=proof_retries,
-            event_logger=event_logger,
-            metadata=meta,
-            stop_event=stop_proof,
-            token_limit=token_limit,
-            initial_messages=init_proof_msgs,
-            initial_partial_response=init_proof_partial,
-            informal_proof=informal_proof,
-        )
-        if all_proof_results[-1].proved:
-            stop_disproof.set()
+        # Re-set thread metadata — sub-threads don't inherit thread-local state.
+        if event_logger is not None:
+            event_logger.set_thread_metadata({
+                "proof_id": f"formal-{problem_id}-a{attempt}-proof-{uid}-parallel",
+                "problem_id": problem_id,
+                "attempt": attempt,
+            })
+        try:
+            meta = {"problem_id": problem_id, "attempt": attempt, "direction": "proof"}
+            all_proof_results = _run_prove_attempts(
+                proof_agent, proof_backend, proved_lean,
+                base_seed=base_seed,
+                retries=proof_retries,
+                event_logger=event_logger,
+                metadata=meta,
+                stop_event=stop_proof,
+                token_limit=token_limit,
+                initial_messages=init_proof_msgs,
+                initial_partial_response=init_proof_partial,
+                informal_proof=informal_proof,
+            )
+            if all_proof_results[-1].proved:
+                stop_disproof.set()
+        finally:
+            if event_logger is not None:
+                event_logger.clear_thread_metadata()
 
     def run_disproof() -> None:
         nonlocal all_disproof_results
-        meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
-        all_disproof_results = _run_prove_attempts(
-            disproof_agent, disproof_backend, negated_lean,
-            base_seed=(base_seed + 0x10000) & 0x7FFFFFFF,
-            retries=disproof_retries,
-            event_logger=event_logger,
-            metadata=meta,
-            stop_event=stop_disproof,
-            token_limit=token_limit,
-            initial_messages=init_dis_msgs,
-            initial_partial_response=init_dis_partial,
-        )
-        if all_disproof_results[-1].proved:
-            stop_proof.set()
+        # Re-set thread metadata — sub-threads don't inherit thread-local state.
+        if event_logger is not None:
+            event_logger.set_thread_metadata({
+                "proof_id": f"formal-{problem_id}-a{attempt}-disproof-{uid}-parallel",
+                "problem_id": problem_id,
+                "attempt": attempt,
+            })
+        try:
+            meta = {"problem_id": problem_id, "attempt": attempt, "direction": "disproof"}
+            all_disproof_results = _run_prove_attempts(
+                disproof_agent, disproof_backend, negated_lean,
+                base_seed=(base_seed + 0x10000) & 0x7FFFFFFF,
+                retries=disproof_retries,
+                event_logger=event_logger,
+                metadata=meta,
+                stop_event=stop_disproof,
+                token_limit=token_limit,
+                initial_messages=init_dis_msgs,
+                initial_partial_response=init_dis_partial,
+            )
+            if all_disproof_results[-1].proved:
+                stop_proof.set()
+        finally:
+            if event_logger is not None:
+                event_logger.clear_thread_metadata()
 
     proof_thread = threading.Thread(target=run_proof, daemon=True)
     disproof_thread = threading.Thread(target=run_disproof, daemon=True)
@@ -462,7 +487,7 @@ class ProveFormalizationsScheduler:
         self,
         cfg: ProveFormalizationsConfig,
         *,
-        event_logger: Optional[EventLoggerFn] = None,
+        event_logger: Optional[EventLogger] = None,
     ) -> None:
         self.cfg = cfg
         self.event_logger = event_logger
@@ -591,6 +616,7 @@ class ProveFormalizationsScheduler:
             attempt = formalization_record.get("attempt", 0)
             base_seed = hash((problem_id, attempt)) & 0x7FFFFFFF
             saved = incomplete_map.get((problem_id, attempt))
+            uid = uuid.uuid4().hex[:8]
 
             # Generate informal proof if enabled.
             informal_proof: Optional[str] = None
@@ -608,69 +634,100 @@ class ProveFormalizationsScheduler:
                 )
 
                 if can_generate:
+                    informal_proof_id = f"informal-{problem_id}-a{attempt}-{uid}"
                     lean_with_answer = replace_abbrev_in_statement(lean_stmt, abbrev_decl)
-                    informal_result = self._informal_prover.generate_proof(
-                        problem_statement=problem_text,
-                        solution_trace=solution_trace,
-                        answer=answer_text,
-                        lean_statement=lean_with_answer,
-                        backend=self._proof_backend,
-                        seed=base_seed,
-                        event_logger=self.event_logger,
-                        metadata={"problem_id": problem_id, "attempt": attempt, "phase": "informal_proof"},
-                    )
+                    if self.event_logger is not None:
+                        self.event_logger.set_thread_metadata({
+                            "proof_id": informal_proof_id,
+                            "problem_id": problem_id,
+                            "attempt": attempt,
+                        })
+                    try:
+                        informal_result = self._informal_prover.generate_proof(
+                            problem_statement=problem_text,
+                            solution_trace=solution_trace,
+                            answer=answer_text,
+                            lean_statement=lean_with_answer,
+                            backend=self._proof_backend,
+                            seed=base_seed,
+                            event_logger=self.event_logger,
+                            metadata={
+                                "problem_id": problem_id,
+                                "attempt": attempt,
+                                "phase": "informal_proof",
+                                "proof_id": informal_proof_id,
+                            },
+                        )
+                    finally:
+                        if self.event_logger is not None:
+                            self.event_logger.clear_thread_metadata()
                     if informal_result.proof_text:
                         informal_proof = informal_result.proof_text
 
-            if cfg.enable_parallel_disproof:
-                assert self._disproof_agent is not None
-                assert self._disproof_backend is not None
-                return process_record_parallel(
-                    formalization_record,
-                    proof_agent=self._proof_agent,
-                    proof_backend=self._proof_backend,
-                    disproof_agent=self._disproof_agent,
-                    disproof_backend=self._disproof_backend,
-                    proof_retries=cfg.proof_retries,
-                    disproof_retries=cfg.disproof_retries,
-                    base_seed=base_seed,
-                    event_logger=self.event_logger,
-                    token_limit=cfg.limit_prover_tokens,
-                    incomplete_result=saved,
-                    informal_proof=informal_proof,
-                    informal_result=informal_result,
-                )
-            elif cfg.enable_sequential_disproof:
-                assert self._disproof_agent is not None
-                assert self._disproof_backend is not None
-                return process_record_sequential_with_disproof(
-                    formalization_record,
-                    proof_agent=self._proof_agent,
-                    proof_backend=self._proof_backend,
-                    disproof_agent=self._disproof_agent,
-                    disproof_backend=self._disproof_backend,
-                    proof_retries=cfg.proof_retries,
-                    disproof_retries=cfg.disproof_retries,
-                    base_seed=base_seed,
-                    event_logger=self.event_logger,
-                    token_limit=cfg.limit_prover_tokens,
-                    incomplete_result=saved,
-                    informal_proof=informal_proof,
-                    informal_result=informal_result,
-                )
-            else:
-                return process_record_sequential(
-                    formalization_record,
-                    proof_agent=self._proof_agent,
-                    proof_backend=self._proof_backend,
-                    proof_retries=cfg.proof_retries,
-                    base_seed=base_seed,
-                    event_logger=self.event_logger,
-                    token_limit=cfg.limit_prover_tokens,
-                    incomplete_result=saved,
-                    informal_proof=informal_proof,
-                    informal_result=informal_result,
-                )
+            # Set thread metadata for the formal proving session so that
+            # backend-level events (tir_session_start, tir_chat_stream_*, etc.)
+            # automatically carry proof_id + problem_id + attempt.
+            formal_proof_id = f"formal-{problem_id}-a{attempt}-{uid}"
+            if self.event_logger is not None:
+                self.event_logger.set_thread_metadata({
+                    "proof_id": formal_proof_id,
+                    "problem_id": problem_id,
+                    "attempt": attempt,
+                })
+
+            try:
+                if cfg.enable_parallel_disproof:
+                    assert self._disproof_agent is not None
+                    assert self._disproof_backend is not None
+                    return process_record_parallel(
+                        formalization_record,
+                        proof_agent=self._proof_agent,
+                        proof_backend=self._proof_backend,
+                        disproof_agent=self._disproof_agent,
+                        disproof_backend=self._disproof_backend,
+                        proof_retries=cfg.proof_retries,
+                        disproof_retries=cfg.disproof_retries,
+                        base_seed=base_seed,
+                        event_logger=self.event_logger,
+                        token_limit=cfg.limit_prover_tokens,
+                        incomplete_result=saved,
+                        informal_proof=informal_proof,
+                        informal_result=informal_result,
+                    )
+                elif cfg.enable_sequential_disproof:
+                    assert self._disproof_agent is not None
+                    assert self._disproof_backend is not None
+                    return process_record_sequential_with_disproof(
+                        formalization_record,
+                        proof_agent=self._proof_agent,
+                        proof_backend=self._proof_backend,
+                        disproof_agent=self._disproof_agent,
+                        disproof_backend=self._disproof_backend,
+                        proof_retries=cfg.proof_retries,
+                        disproof_retries=cfg.disproof_retries,
+                        base_seed=base_seed,
+                        event_logger=self.event_logger,
+                        token_limit=cfg.limit_prover_tokens,
+                        incomplete_result=saved,
+                        informal_proof=informal_proof,
+                        informal_result=informal_result,
+                    )
+                else:
+                    return process_record_sequential(
+                        formalization_record,
+                        proof_agent=self._proof_agent,
+                        proof_backend=self._proof_backend,
+                        proof_retries=cfg.proof_retries,
+                        base_seed=base_seed,
+                        event_logger=self.event_logger,
+                        token_limit=cfg.limit_prover_tokens,
+                        incomplete_result=saved,
+                        informal_proof=informal_proof,
+                        informal_result=informal_result,
+                    )
+            finally:
+                if self.event_logger is not None:
+                    self.event_logger.clear_thread_metadata()
 
         with ThreadPoolExecutor(max_workers=outer_workers) as pool:
             future_to_rec: Dict[Future[Dict[str, Any]], Dict[str, Any]] = {

@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
-from .raw_base import EventLoggerFn
+from .raw_base import EventLogger
 
 
 # ============================================================
@@ -120,7 +120,7 @@ class TIRBackend(ABC):
     """
 
     _verbose: bool = False
-    _event_logger: Optional[EventLoggerFn] = None
+    _event_logger: Optional[EventLogger] = None
     _token_counter_fn: Optional[Callable[..., int]] = None
     _text_counter_fn: Optional[Callable[[str], int]] = None
 
@@ -128,9 +128,9 @@ class TIRBackend(ABC):
         """Enable real-time prompt+token printing to stdout."""
         self._verbose = enabled
 
-    def set_event_logger(self, fn: EventLoggerFn) -> None:
-        """Register a callable that receives (event_type, payload) dicts."""
-        self._event_logger = fn
+    def set_event_logger(self, logger: EventLogger) -> None:
+        """Register an EventLogger whose log_event() receives structured events."""
+        self._event_logger = logger
 
     def set_token_counter(
         self,
@@ -164,7 +164,7 @@ class TIRBackend(ABC):
 
     def _log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         if self._event_logger is not None:
-            self._event_logger(event_type, payload)
+            self._event_logger.log_event(event_type, payload)
 
     # ------------------------------------------------------------------
     # Abstract: one streaming turn
@@ -501,7 +501,7 @@ class TIRTokenCounter:
 
 
 __all__ = [
-    "EventLoggerFn",
+    "EventLogger",
     "TIRGenerationConfig",
     "TIRToolCallSpec",
     "TIRStreamChunk",

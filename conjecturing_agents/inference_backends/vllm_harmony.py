@@ -255,7 +255,7 @@ class VLLMHarmonyBackendConfig:
         return f"http://{self.client_host}:{self.port}/v1"
 
 
-EventLoggerFn = Callable[[str, Dict[str, Any]], None]
+from conjecturing_agents.inference_backends.raw_base import EventLogger
 ChunkTerminationFn = Callable[["HarmonySessionState", str, str], Optional[TerminationSignal]]
 MessageTerminationFn = Callable[["HarmonySessionState", Message, str], Optional[TerminationSignal]]
 SessionTerminationFn = Callable[["HarmonySessionState"], Optional[TerminationSignal]]
@@ -387,7 +387,7 @@ class VLLMHarmonyBackend:
             self,
             cfg: VLLMHarmonyBackendConfig,
             *,
-            event_logger: Optional[EventLoggerFn] = None,
+            event_logger: Optional[EventLogger] = None,
         ):
         self.cfg = cfg
         self.event_logger = event_logger
@@ -413,7 +413,7 @@ class VLLMHarmonyBackend:
         if self.event_logger is None:
             return
         try:
-            self.event_logger(event_type, payload)
+            self.event_logger.log_event(event_type, payload)
         except Exception:
             pass
 

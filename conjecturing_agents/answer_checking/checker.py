@@ -8,7 +8,7 @@ from conjecturing_agents.agents.conjecture_formalizer import (
     extract_rhs_from_abbrev_declaration,
 )
 from conjecturing_agents.agents.goedel_prover.config import GoedelProverConfig
-from conjecturing_agents.inference_backends.raw_base import EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import EventLogger
 from conjecturing_agents.inference_backends.ollama_raw import OllamaConfig
 from conjecturing_agents.inference_backends.vllm_raw import VLLMRawConfig
 from conjecturing_agents.tool_calling_backends.lean4_compiler import (
@@ -83,7 +83,7 @@ class AnswerChecker:
     def __init__(
         self,
         cfg: Optional[AnswerCheckerConfig] = None,
-        event_logger: Optional[EventLoggerFn] = None,
+        event_logger: Optional[EventLogger] = None,
         goedel_backend=None,
     ):
         self.cfg = cfg or AnswerCheckerConfig()

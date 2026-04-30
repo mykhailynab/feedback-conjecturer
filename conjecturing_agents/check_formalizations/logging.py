@@ -18,19 +18,18 @@ Events come from two sources:
 from __future__ import annotations
 
 import json
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from conjecturing_agents.inference_backends.raw_base import EventLoggerFn  # re-export
+from conjecturing_agents.inference_backends.raw_base import EventLogger
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class CheckFormalizationsLogger:
+class CheckFormalizationsLogger(EventLogger):
     """
     Thread-safe JSONL event logger.
 
@@ -39,14 +38,15 @@ class CheckFormalizationsLogger:
     """
 
     def __init__(self, events_path: str) -> None:
+        super().__init__()
         self.events_path = events_path
-        self._lock = threading.Lock()
         Path(events_path).parent.mkdir(parents=True, exist_ok=True)
         # Truncate / create the file
         Path(events_path).write_text("", encoding="utf-8")
 
     def log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
-        rec = {"ts": _now_iso(), "event": event_type, **payload}
+        merged = self._merge_thread_metadata(payload)
+        rec = {"ts": _now_iso(), "event": event_type, **merged}
         line = json.dumps(rec, ensure_ascii=False) + "\n"
         with self._lock:
             with open(self.events_path, "a", encoding="utf-8") as f:

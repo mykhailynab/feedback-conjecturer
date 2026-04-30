@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from conjecturing_agents.inference_backends.raw_base import EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import EventLogger
 from conjecturing_agents.inference_backends.tir_base import (
     TIRBackend,
     TIRGenerationConfig,
@@ -71,7 +71,7 @@ class InformalProverAgent:
         backend: TIRBackend,
         *,
         seed: int = 0,
-        event_logger: Optional[EventLoggerFn] = None,
+        event_logger: Optional[EventLogger] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> InformalProverResult:
         """
@@ -95,7 +95,7 @@ class InformalProverAgent:
 
         def _log(event_type: str, payload: Dict[str, Any]) -> None:
             if event_logger is not None:
-                event_logger(event_type, {**payload, **_meta})
+                event_logger.log_event(event_type, {**payload, **_meta})
 
         t0 = time.time()
 

@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from conjecturing_agents.agents.goedel_prover import GoedelProverAgent
 from conjecturing_agents.answer_checking.lean_equiv import extract_preamble
-from conjecturing_agents.inference_backends.raw_base import EventLoggerFn, RawBackend
+from conjecturing_agents.inference_backends.raw_base import EventLogger, RawBackend
 
 from .result import CheckResult
 
@@ -77,7 +77,7 @@ def check_goedel_equiv(
     backend: RawBackend,
     *,
     seed: int = 0,
-    event_logger: Optional[EventLoggerFn] = None,
+    event_logger: Optional[EventLogger] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> CheckResult:
     """
@@ -134,7 +134,7 @@ def check_goedel_inequiv(
     backend: RawBackend,
     *,
     seed: int = 0,
-    event_logger: Optional[EventLoggerFn] = None,
+    event_logger: Optional[EventLogger] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> CheckResult:
     """

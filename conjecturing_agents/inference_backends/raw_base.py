@@ -19,11 +19,41 @@ from __future__ import annotations
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, Optional
 
-# Signature of an event-logger callable.  Implementations write one JSONL
-# record per call to wherever they are configured (e.g. goedel_events.jsonl).
-EventLoggerFn = Callable[[str, Dict[str, Any]], None]
+class EventLogger:
+    """Base class for structured event loggers.
+
+    Subclass and override ``log_event()`` to write events to JSONL, intercept
+    for metrics, etc.
+
+    Supports per-thread metadata via ``set_thread_metadata()`` /
+    ``clear_thread_metadata()``.  When set, the metadata dict is merged into
+    every ``log_event()`` call from that thread — e.g. the scheduler sets
+    ``proof_id`` so that backend-level events automatically carry it.
+    """
+
+    def __init__(self) -> None:
+        self._tls = threading.local()
+        self._lock = threading.Lock()
+
+    def log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """Write a single event.  Override in subclasses."""
+
+    def set_thread_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Set metadata merged into every ``log_event`` from this thread."""
+        self._tls.metadata = metadata
+
+    def clear_thread_metadata(self) -> None:
+        """Remove per-thread metadata."""
+        self._tls.metadata = None
+
+    def _merge_thread_metadata(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Return *payload* with per-thread metadata prepended (if any)."""
+        meta = getattr(self._tls, "metadata", None)
+        if meta:
+            return {**meta, **payload}
+        return payload
 
 
 @dataclass
@@ -63,19 +93,19 @@ class RawBackend(ABC):
 
     # Set to True via set_verbose() to print prompts and tokens to stdout.
     _verbose: bool = False
-    _event_logger: Optional[EventLoggerFn] = None
+    _event_logger: Optional[EventLogger] = None
 
     def set_verbose(self, enabled: bool) -> None:
         """Enable real-time prompt+token printing to stdout."""
         self._verbose = enabled
 
-    def set_event_logger(self, fn: EventLoggerFn) -> None:
-        """Register a callable that receives (event_type, payload) dicts."""
-        self._event_logger = fn
+    def set_event_logger(self, logger: EventLogger) -> None:
+        """Register an EventLogger whose log_event() receives structured events."""
+        self._event_logger = logger
 
     def _log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         if self._event_logger is not None:
-            self._event_logger(event_type, payload)
+            self._event_logger.log_event(event_type, payload)
 
     @abstractmethod
     def generate(
@@ -113,7 +143,7 @@ class RawBackend(ABC):
 
 
 __all__ = [
-    "EventLoggerFn",
+    "EventLogger",
     "RawGenerationConfig",
     "RawGenerationResult",
     "RawBackend",

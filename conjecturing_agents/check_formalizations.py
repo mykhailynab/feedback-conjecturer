@@ -75,28 +75,30 @@ def main() -> None:
     checker_cfg = make_checker_config(cfg)
 
     events_path = str(Path(output_path).parent / "check_goedel_events.jsonl")
-    event_logger = (
-        CheckFormalizationsLogger(events_path)
-        if (checker_cfg.use_goedel_prover or checker_cfg.use_goedel_disprover)
-        else None
-    )
-
     # tok/s tracking — accumulated from raw_generation_done events
     tok_lock = threading.Lock()
     total_output_tokens = 0
     total_generation_ms = 0
 
-    def _log_event_intercepted(event_type: str, payload: Any) -> None:
-        nonlocal total_output_tokens, total_generation_ms
-        if event_type == "raw_generation_done":
-            gen_toks = payload.get("generated_tokens")
-            elapsed = payload.get("elapsed_ms")
-            if gen_toks is not None and elapsed is not None and elapsed > 0:
-                with tok_lock:
-                    total_output_tokens += gen_toks
-                    total_generation_ms += elapsed
-        if event_logger is not None:
-            event_logger.log_event(event_type, payload)
+    class _TokenTrackingLogger(CheckFormalizationsLogger):
+        """Intercepts raw_generation_done events to track throughput."""
+
+        def log_event(self, event_type: str, payload: Any) -> None:
+            nonlocal total_output_tokens, total_generation_ms
+            if event_type == "raw_generation_done":
+                gen_toks = payload.get("generated_tokens")
+                elapsed = payload.get("elapsed_ms")
+                if gen_toks is not None and elapsed is not None and elapsed > 0:
+                    with tok_lock:
+                        total_output_tokens += gen_toks
+                        total_generation_ms += elapsed
+            super().log_event(event_type, payload)
+
+    event_logger = (
+        _TokenTrackingLogger(events_path)
+        if (checker_cfg.use_goedel_prover or checker_cfg.use_goedel_disprover)
+        else None
+    )
 
     # Build a shared load-balanced backend when multiple Ollama hosts are given.
     # The backend is shared across all AnswerChecker instances so that the
@@ -153,7 +155,7 @@ def main() -> None:
     def make_checker() -> AnswerChecker:
         return AnswerChecker(
             checker_cfg,
-            event_logger=_log_event_intercepted,
+            event_logger=event_logger,
             goedel_backend=shared_goedel_backend,
         )
 

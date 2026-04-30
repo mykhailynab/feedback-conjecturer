@@ -249,6 +249,7 @@ class LlamaCppTIRBackend(TIRBackend):
 
         self._log_event("tir_chat_stream_start", {
             "model": self.cfg.model,
+            "base_url": self.cfg.base_url,
             "message_count": len(messages),
             "tool_count": len(tools),
             "max_tokens": cfg.max_tokens,

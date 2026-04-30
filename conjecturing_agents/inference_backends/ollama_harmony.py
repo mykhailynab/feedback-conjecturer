@@ -31,8 +31,8 @@ from openai_harmony import (ToolNamespaceConfig, Conversation)
 import ollama
 from openai_harmony import Author, Message, Role, TextContent
 
+from conjecturing_agents.inference_backends.raw_base import EventLogger
 from conjecturing_agents.inference_backends.vllm_harmony import (
-    EventLoggerFn,
     HarmonyAgentSpec,
     HarmonyRunResult,
     HarmonySessionState,
@@ -79,7 +79,7 @@ class OllamaChatBackend:
         self,
         cfg: OllamaChatConfig,
         *,
-        event_logger: Optional[EventLoggerFn] = None,
+        event_logger: Optional[EventLogger] = None,
     ) -> None:
         self.cfg = cfg
         self.event_logger = event_logger
@@ -107,7 +107,7 @@ class OllamaChatBackend:
         if self.event_logger is None:
             return
         try:
-            self.event_logger(event_type, payload)
+            self.event_logger.log_event(event_type, payload)
         except Exception:
             pass
 

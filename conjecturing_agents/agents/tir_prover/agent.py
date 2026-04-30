@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from conjecturing_agents.inference_backends.raw_base import EventLoggerFn
+from conjecturing_agents.inference_backends.raw_base import EventLogger
 from conjecturing_agents.inference_backends.tir_base import (
     TIRBackend,
     TIRGenerationConfig,
@@ -93,7 +93,7 @@ class TIRProverAgent:
         backend: TIRBackend,
         *,
         seed: int = 0,
-        event_logger: Optional[EventLoggerFn] = None,
+        event_logger: Optional[EventLogger] = None,
         metadata: Optional[Dict[str, Any]] = None,
         stop_event: Optional[threading.Event] = None,
         token_limit: int = 0,
@@ -137,7 +137,7 @@ class TIRProverAgent:
 
         def _log(event_type: str, payload: Dict[str, Any]) -> None:
             if event_logger is not None:
-                event_logger(event_type, {**payload, **_meta})
+                event_logger.log_event(event_type, {**payload, **_meta})
 
         t0 = time.time()
 
@@ -306,20 +306,41 @@ class TIRProverAgent:
         # Each prove_theorem() call gets its own isolated Python kernel.
         # ------------------------------------------------------------------ #
         jupyter_tool: Optional[JupyterTIRToolBackend] = None
-        try:
-            if self.cfg.use_python_tool:
-                jupyter_tool = JupyterTIRToolBackend(
-                    description=self.cfg.python_tool_description,
-                    cfg=self.cfg.jupyter,
-                )
-                tools.append(jupyter_tool.tool_def)
-                tool_handlers[self.cfg.jupyter.tool_name] = jupyter_tool.handle_call
-        finally:
-            if jupyter_tool is not None:
+        if self.cfg.use_python_tool:
+            jupyter_tool = JupyterTIRToolBackend(
+                description=self.cfg.python_tool_description,
+                cfg=self.cfg.jupyter,
+            )
+            tools.append(jupyter_tool.tool_def)
+
+            # Wrap handle_call with logging so we can detect hangs.
+            _raw_handle = jupyter_tool.handle_call
+
+            def _logged_python_handle(tool_name: str, arguments: Dict[str, Any]) -> str:
+                _log("tir_python_start", {
+                    "code_chars": len(arguments.get("code", "")),
+                })
+                t_start = time.time()
                 try:
-                    jupyter_tool.close()
-                except Exception:
-                    pass
+                    result = _raw_handle(tool_name, arguments)
+                    elapsed = int((time.time() - t_start) * 1000)
+                    _log("tir_python_done", {
+                        "elapsed_ms": elapsed,
+                        "result_chars": len(result),
+                        "timed_out": False,
+                    })
+                    return result
+                except Exception as exc:
+                    elapsed = int((time.time() - t_start) * 1000)
+                    _log("tir_python_done", {
+                        "elapsed_ms": elapsed,
+                        "result_chars": 0,
+                        "timed_out": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    raise
+
+            tool_handlers[self.cfg.jupyter.tool_name] = _logged_python_handle
 
         # ------------------------------------------------------------------ #
         # Run the TIR session
@@ -333,7 +354,11 @@ class TIRProverAgent:
                 stop_event=_combined_stop,
             )
         finally:
-            pass
+            if jupyter_tool is not None:
+                try:
+                    jupyter_tool.close()
+                except Exception:
+                    pass
 
         # ------------------------------------------------------------------ #
         # Build result

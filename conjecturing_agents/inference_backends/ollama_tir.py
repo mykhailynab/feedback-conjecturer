@@ -256,6 +256,7 @@ class OllamaTIRBackend(TIRBackend):
 
         self._log_event("tir_chat_stream_start", {
             "model": self.cfg.model,
+            "host": self.cfg.host,
             "message_count": len(messages),
             "tool_count": len(tools),
             "max_tokens": cfg.max_tokens,
