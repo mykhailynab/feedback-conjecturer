@@ -76,17 +76,6 @@ class TIRStreamChunk:
 
 
 @dataclass
-class TIRTurnRecord:
-    """Record of one assistant turn (thinking, response text, tool calls dispatched)."""
-
-    turn: int
-    thinking: str
-    content: str
-    # Each entry: {"name": ..., "arguments": ..., "result": ...}
-    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass
 class TIRSessionResult:
     """Result returned by run_session()."""
 
@@ -230,7 +219,7 @@ class TIRBackend(ABC):
         t0 = time.time()
         deadline = t0 + cfg.timeout_seconds
 
-        turns: List[TIRTurnRecord] = []
+        n_turns = 0
         termination_reason = "unknown"
         exception_text: Optional[str] = None
         final_text = ""
@@ -340,11 +329,7 @@ class TIRBackend(ABC):
                             partial_assistant_turn["reasoning_content"] = thinking
                     break
 
-                turn_record = TIRTurnRecord(
-                    turn=turn_idx,
-                    thinking=thinking,
-                    content=content,
-                )
+                n_turns += 1
 
                 self._log_event("tir_turn_done", {
                     "turn": turn_idx,
@@ -355,7 +340,6 @@ class TIRBackend(ABC):
 
                 if tool_call_specs:
                     # Build assistant message with tool calls.
-                    # Include thinking if present (Ollama preserves it across turns).
                     assistant_msg: Dict[str, Any] = {
                         "role": "assistant",
                         "content": content or None,
@@ -395,12 +379,6 @@ class TIRBackend(ABC):
                             "result_chars": len(result_text),
                         })
 
-                        turn_record.tool_calls.append({
-                            "name": tc.name,
-                            "arguments": tc.arguments,
-                            "result": result_text,
-                        })
-
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -408,25 +386,38 @@ class TIRBackend(ABC):
                             "content": result_text,
                         })
 
-                    turns.append(turn_record)
                     continue  # next inference turn
 
-                turns.append(turn_record)
-
-                # the thinking field may still be there
-                if not content and not tool_call_specs:
+                # No tool calls — either empty response or final answer.
+                if not content:
+                    # The model produced nothing usable (thinking may still
+                    # be present). Record it as a partial assistant turn so
+                    # the thinking content is not lost.
+                    if thinking:
+                        partial_assistant_turn = {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": thinking,
+                        }
                     termination_reason = "no_tokens"
                     break
 
-                # No tool calls -> final answer.
+                # Final answer — append as a proper assistant message so it
+                # appears in conversation_history.
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": content,
+                }
+                if thinking:
+                    assistant_msg["reasoning_content"] = thinking
+                messages.append(assistant_msg)
                 final_text = content
                 termination_reason = "final_answer"
                 break
 
             if termination_reason == "unknown":
                 termination_reason = "max_turns_exhausted"
-                if turns:
-                    final_text = turns[-1].content
+                final_text = content  # from the last turn in the loop
 
         except Exception as exc:
             exception_text = f"{type(exc).__name__}: {exc}"
@@ -436,7 +427,7 @@ class TIRBackend(ABC):
         self._log_event("tir_session_done", {
             "termination_reason": termination_reason,
             "elapsed_ms": elapsed_ms,
-            "turns": len(turns),
+            "turns": n_turns,
             "exception": exception_text,
         })
 
@@ -514,7 +505,6 @@ __all__ = [
     "TIRGenerationConfig",
     "TIRToolCallSpec",
     "TIRStreamChunk",
-    "TIRTurnRecord",
     "TIRSessionResult",
     "TIRToolHandler",
     "TIRBackend",

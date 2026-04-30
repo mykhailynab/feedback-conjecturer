@@ -316,13 +316,13 @@ screen -dmS prove_formalizations bash -c \
         --tir-backend llamacpp \
         --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
         --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 \
-        --tir-llamacpp-max-concurrent 1 \
+        --tir-llamacpp-max-concurrent 3 \
         --tir-llamacpp-client-timeout 960 \
         --tir-llamacpp-presence-penalty 0.0 \
         --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
         --formalizations-path logs/prove_cot_noinformal_v2_schema/formalizations.jsonl \
         --lean-project-dir /workspace/mathlib4 \
-        --parallelism 4 \
+        --parallelism 6 \
         --limit-prover-tokens 262144 \
         --continue &> prove_formalizations_tir_cot_llamacpp_noinformal_v2.log'
 
