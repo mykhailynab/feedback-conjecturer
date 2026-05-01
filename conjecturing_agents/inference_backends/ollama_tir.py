@@ -31,6 +31,10 @@ class OllamaTIRConfig:
     model: str = "qwen3.5"
     host: str = "http://localhost:11434"
     client_timeout: int = 960
+    # If no streaming chunk is received within this many seconds, forcibly
+    # close the HTTP stream.  Guards against half-open TCP connections where
+    # the server stops sending but the client never times out.
+    stream_inactivity_timeout: float = 60.0
 
     # ------------------------------------------------------------------ #
     # Enable extended thinking for models that support it (e.g. qwen3).
@@ -99,6 +103,17 @@ class OllamaTIRConfig:
             help=f"HTTP client timeout (seconds) for the {prefix} Ollama backend. Default: %(default)s.",
         )
 
+        parser.add_argument(
+            f"--{pre}-ollama-stream-inactivity-timeout",
+            dest=f"{dst}_ollama_stream_inactivity_timeout",
+            type=float,
+            default=d.get("stream_inactivity_timeout", defs.stream_inactivity_timeout),
+            help=(
+                "Close the HTTP stream if no chunk arrives within this many "
+                "seconds. Guards against hung connections. Default: %(default)s."
+            ),
+        )
+
         # Model/sampling fields → --{prefix}-{field}
         parser.add_argument(
             f"--{pre}-no-think",
@@ -162,6 +177,7 @@ class OllamaTIRConfig:
             "model": getattr(args, f"{dst}_ollama_model"),
             "host": getattr(args, f"{dst}_ollama_host"),
             "client_timeout": getattr(args, f"{dst}_ollama_client_timeout"),
+            "stream_inactivity_timeout": getattr(args, f"{dst}_ollama_stream_inactivity_timeout"),
             "think": getattr(args, f"{dst}_think"),
             "top_k": getattr(args, f"{dst}_top_k"),
             "min_p": getattr(args, f"{dst}_min_p"),
@@ -301,50 +317,84 @@ class OllamaTIRBackend(TIRBackend):
 
         stream = client.chat(**chat_kwargs)
 
+        # Inactivity watchdog: forcibly close the stream if no chunk arrives
+        # within ``stream_inactivity_timeout`` seconds.  Guards against
+        # half-open TCP connections where the server stops sending but the
+        # client never times out.
+        _stream_ref = stream
+
+        def _close_stream() -> None:
+            try:
+                _stream_ref.close()
+            except Exception:
+                pass
+
+        inactivity_timeout = self.cfg.stream_inactivity_timeout
+        watchdog: Optional[threading.Timer] = None
+        if inactivity_timeout > 0:
+            watchdog = threading.Timer(inactivity_timeout, _close_stream)
+            watchdog.daemon = True
+            watchdog.start()
+
         last_printed_think = False
 
-        for chunk in stream:
-            if stop_event is not None and stop_event.is_set():
-                break
+        try:
+            for chunk in stream:
+                # Reset the inactivity watchdog on every received chunk.
+                if watchdog is not None:
+                    watchdog.cancel()
+                    watchdog = threading.Timer(inactivity_timeout, _close_stream)
+                    watchdog.daemon = True
+                    watchdog.start()
 
-            if first_chunk:
-                self._log_event("tir_chat_stream_first_chunk", {
-                    "elapsed_ms": int((time.time() - t0) * 1000),
-                })
-                first_chunk = False
+                if stop_event is not None and stop_event.is_set():
+                    break
 
-            thinking_text = chunk.message.thinking or ""
-            content_text = chunk.message.content or ""
+                if first_chunk:
+                    self._log_event("tir_chat_stream_first_chunk", {
+                        "elapsed_ms": int((time.time() - t0) * 1000),
+                    })
+                    first_chunk = False
 
-            # Tool calls come complete (not streamed token-by-token); accumulate.
-            if chunk.message.tool_calls:
-                for tc in chunk.message.tool_calls:
-                    args = tc.function.arguments
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except Exception:
-                            args = {"code": args}
-                    # Ollama SDK does not expose tool call IDs; generate synthetic ones.
-                    synthetic_id = f"call_{len(tool_calls_accumulated)}"
-                    tool_calls_accumulated.append(
-                        TIRToolCallSpec(id=synthetic_id, name=tc.function.name, arguments=args)
-                    )
+                thinking_text = chunk.message.thinking or ""
+                content_text = chunk.message.content or ""
 
-            if self._verbose:
-                if thinking_text:
-                    if not last_printed_think:
-                        last_printed_think = True
-                        print('\n[think]\n')
-                    print(f"{thinking_text}", end="", flush=True)
-                if content_text:
-                    if last_printed_think:
-                        last_printed_think = False
-                        print('\n[\\think]\n')
-                    print(content_text, end="", flush=True)
+                # Tool calls come complete (not streamed token-by-token); accumulate.
+                if chunk.message.tool_calls:
+                    for tc in chunk.message.tool_calls:
+                        args = tc.function.arguments
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                args = {"code": args}
+                        # Ollama SDK does not expose tool call IDs; generate synthetic ones.
+                        synthetic_id = f"call_{len(tool_calls_accumulated)}"
+                        tool_calls_accumulated.append(
+                            TIRToolCallSpec(id=synthetic_id, name=tc.function.name, arguments=args)
+                        )
 
-            if thinking_text or content_text:
-                yield TIRStreamChunk(thinking=thinking_text, content=content_text)
+                if self._verbose:
+                    if thinking_text:
+                        if not last_printed_think:
+                            last_printed_think = True
+                            print('\n[think]\n')
+                        print(f"{thinking_text}", end="", flush=True)
+                    if content_text:
+                        if last_printed_think:
+                            last_printed_think = False
+                            print('\n[\\think]\n')
+                        print(content_text, end="", flush=True)
+
+                if thinking_text or content_text:
+                    yield TIRStreamChunk(thinking=thinking_text, content=content_text)
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+            try:
+                stream.close()
+            except Exception:
+                pass
 
         # Emit accumulated tool calls (if any) in a final chunk so the caller
         # can distinguish "turn with tool calls" from "turn with only text".

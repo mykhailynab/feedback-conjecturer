@@ -194,11 +194,12 @@ def analyze_formalizations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         elapsed_ms = safe_int(rec.get("elapsed_ms"), default=0)
         if elapsed_ms > 0:
-            elapsed_ms_all.append(elapsed_ms)
             if status == "success":
                 elapsed_ms_success.append(elapsed_ms)
+                elapsed_ms_all.append(elapsed_ms)
             elif status == "failed":
                 elapsed_ms_failed.append(elapsed_ms)
+                elapsed_ms_all.append(elapsed_ms)
 
         for tag in rec.get("extracted_row_tags", []) or []:
             tag_counter[str(tag)] += 1

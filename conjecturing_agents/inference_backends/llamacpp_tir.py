@@ -94,6 +94,10 @@ class LlamaCppTIRConfig:
     model: str = ""
     api_key: str = "sk-no-key-required"
     client_timeout: int = 960
+    # If no streaming chunk is received within this many seconds, forcibly
+    # close the HTTP stream.  Guards against half-open TCP connections where
+    # the server stops sending but the client never times out.
+    stream_inactivity_timeout: float = 60.0
 
     # ------------------------------------------------------------------ #
     # Per-request sampling (standard OpenAI params).
@@ -150,6 +154,16 @@ class LlamaCppTIRConfig:
             help="HTTP client timeout in seconds. Default: %(default)s.",
         )
         parser.add_argument(
+            f"--{pre}-stream-inactivity-timeout",
+            dest=f"{dst}_stream_inactivity_timeout",
+            type=float,
+            default=d.get("stream_inactivity_timeout", defs.stream_inactivity_timeout),
+            help=(
+                "Close the HTTP stream if no chunk arrives within this many "
+                "seconds. Guards against hung connections. Default: %(default)s."
+            ),
+        )
+        parser.add_argument(
             f"--{pre}-presence-penalty",
             dest=f"{dst}_presence_penalty",
             type=float,
@@ -180,6 +194,7 @@ class LlamaCppTIRConfig:
             "model": getattr(args, f"{dst}_model"),
             "api_key": getattr(args, f"{dst}_api_key"),
             "client_timeout": getattr(args, f"{dst}_client_timeout"),
+            "stream_inactivity_timeout": getattr(args, f"{dst}_stream_inactivity_timeout"),
             "presence_penalty": getattr(args, f"{dst}_presence_penalty"),
             "tokenizer_path": getattr(args, f"{dst}_tokenizer_path"),
         }
@@ -310,54 +325,88 @@ class LlamaCppTIRBackend(TIRBackend):
 
         stream = client.chat.completions.create(**create_kwargs)
 
-        for chunk in stream:
-            if stop_event is not None and stop_event.is_set():
-                break
+        # Inactivity watchdog: forcibly close the stream if no chunk arrives
+        # within ``stream_inactivity_timeout`` seconds.  Guards against
+        # half-open TCP connections where the server stops sending but the
+        # httpx read timeout never fires.
+        _stream_ref = stream
 
-            if first_chunk:
-                self._log_event("tir_chat_stream_first_chunk", {
-                    "elapsed_ms": int((time.time() - t0) * 1000),
-                })
-                first_chunk = False
+        def _close_stream() -> None:
+            try:
+                _stream_ref.close()
+            except Exception:
+                pass
 
-            choice = chunk.choices[0] if chunk.choices else None
-            if choice is None:
-                continue
-            delta = choice.delta
+        inactivity_timeout = self.cfg.stream_inactivity_timeout
+        watchdog: Optional[threading.Timer] = None
+        if inactivity_timeout > 0:
+            watchdog = threading.Timer(inactivity_timeout, _close_stream)
+            watchdog.daemon = True
+            watchdog.start()
 
-            thinking_text = delta.model_extra.get("reasoning_content") or ""
-            content_text = delta.content or ""
+        try:
+            for chunk in stream:
+                # Reset the inactivity watchdog on every received chunk.
+                if watchdog is not None:
+                    watchdog.cancel()
+                    watchdog = threading.Timer(inactivity_timeout, _close_stream)
+                    watchdog.daemon = True
+                    watchdog.start()
 
-            # Accumulate tool call deltas by index.
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tc_accum:
-                        tc_accum[idx] = ["", "", ""]  # [id, name, args_str]
-                    if tc_delta.id:
-                        tc_accum[idx][0] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tc_accum[idx][1] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tc_accum[idx][2] += tc_delta.function.arguments
+                if stop_event is not None and stop_event.is_set():
+                    break
 
-            if self._verbose:
+                if first_chunk:
+                    self._log_event("tir_chat_stream_first_chunk", {
+                        "elapsed_ms": int((time.time() - t0) * 1000),
+                    })
+                    first_chunk = False
+
+                choice = chunk.choices[0] if chunk.choices else None
+                if choice is None:
+                    continue
+                delta = choice.delta
+
+                thinking_text = delta.model_extra.get("reasoning_content") or ""
+                content_text = delta.content or ""
+
+                # Accumulate tool call deltas by index.
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tc_accum:
+                            tc_accum[idx] = ["", "", ""]  # [id, name, args_str]
+                        if tc_delta.id:
+                            tc_accum[idx][0] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tc_accum[idx][1] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tc_accum[idx][2] += tc_delta.function.arguments
+
+                if self._verbose:
+                    if thinking_text:
+                        if not last_printed_think:
+                            last_printed_think = True
+                            print('\n[think]\n')
+                        print(f"{thinking_text}", end="", flush=True)
+                    if content_text:
+                        if last_printed_think:
+                            last_printed_think = False
+                            print('\n[\\think]\n')
+                        print(content_text, end="", flush=True)
+
                 if thinking_text:
-                    if not last_printed_think:
-                        last_printed_think = True
-                        print('\n[think]\n')
-                    print(f"{thinking_text}", end="", flush=True)
-                if content_text:
-                    if last_printed_think:
-                        last_printed_think = False
-                        print('\n[\\think]\n')
-                    print(content_text, end="", flush=True)
-
-            if thinking_text:
-                thinking_accum += thinking_text
-            if thinking_text or content_text:
-                yield TIRStreamChunk(thinking=thinking_text, content=content_text)
+                    thinking_accum += thinking_text
+                if thinking_text or content_text:
+                    yield TIRStreamChunk(thinking=thinking_text, content=content_text)
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+            try:
+                stream.close()
+            except Exception:
+                pass
 
         # Build final tool call specs from accumulated deltas.
         tool_calls_final: List[TIRToolCallSpec] = []

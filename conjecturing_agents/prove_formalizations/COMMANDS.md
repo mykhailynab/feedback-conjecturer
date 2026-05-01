@@ -400,6 +400,118 @@ screen -dmS prove_formalizations bash -c \
 screen -S monitor_prove tail -f prove_formalizations_tir_nocot_llamacpp_informal_v2.log
 ```
 
+Whole dataset, strip thinking, add informal proof, fixed logging, hotfix tool calls, 2x max tokens, 16x turns, 2x time, limit 110000:
+NOTE: Even better logging to debug stalling GPU
+(6x 4090)
+```sh
+mkdir logs/prove_nocot_informal_v2_schema
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/prove_nocot_informal_v2_schema
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-strip-thinking \
+        --add-informal-proof \
+        --conjecturer-attempts logs/putnam_120b_tir_pass4_20min/attempts.jsonl \
+        --problem-references data/conjecture_formalizer_inputs/references_putnam.csv \
+        --tir-max-tokens 32768 \
+        --tir-max-turns 512 \
+        --tir-timeout-seconds 1200 \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 http://localhost:8005 http://localhost:8006 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/prove_nocot_informal_v2_schema/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 18 \
+        --limit-prover-tokens 110000 \
+        --continue \
+        --continue-keep-inconclusive &> prove_formalizations_tir_nocot_llamacpp_informal_v2.log'
+screen -S monitor_prove tail -f prove_formalizations_tir_nocot_llamacpp_informal_v2.log
+```
+
+Whole dataset, strip thinking, add informal proof, fixed logging, hotfix tool calls, 1x max tokens, 16x turns, 1x time, 110K:
+NOTE: Even better logging to debug stalling GPU
+(4x 5000)
+```sh
+mkdir logs/prove_nocot_informal_v2_schema_short
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/prove_nocot_informal_v2_schema_short
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-strip-thinking \
+        --add-informal-proof \
+        --conjecturer-attempts logs/putnam_120b_tir_pass4_20min/attempts.jsonl \
+        --problem-references data/conjecture_formalizer_inputs/references_putnam.csv \
+        --tir-max-tokens 16384 \
+        --tir-max-turns 512 \
+        --tir-timeout-seconds 600 \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/prove_nocot_informal_v2_schema_short/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 12 \
+        --limit-prover-tokens 110000 \
+        --continue \
+        --continue-keep-inconclusive &> prove_formalizations_tir_nocot_llamacpp_informal_v2_short.log'
+screen -S monitor_prove tail -f prove_formalizations_tir_nocot_llamacpp_informal_v2_short.log
+```
+
+
+Whole dataset, strip thinking, add informal proof, fixed logging, hotfix tool calls, 1x max tokens, 16x turns, 1x time, 110K:
+NOTE: Even better logging to debug stalling GPU
+(6x 4090)
+```sh
+mkdir logs/prove_nocot_informal_v2_schema_short
+cp logs/conjecture_formalization_logs_20mins/formalizations.jsonl logs/prove_nocot_informal_v2_schema_short
+screen -dmS prove_formalizations bash -c \
+     'source /root/.elan/env && \
+      cd /workspace && \
+      export PYTHONPATH=. && \
+      python conjecturing_agents/prove_formalizations.py \
+        --prover-type tir \
+        --tir-strip-thinking \
+        --add-informal-proof \
+        --conjecturer-attempts logs/putnam_120b_tir_pass4_20min/attempts.jsonl \
+        --problem-references data/conjecture_formalizer_inputs/references_putnam.csv \
+        --tir-max-tokens 16384 \
+        --tir-max-turns 512 \
+        --tir-timeout-seconds 600 \
+        --tir-temperature 0.6 \
+        --tir-top-p 0.95 \
+        --tir-backend llamacpp \
+        --tir-llamacpp-model unsloth/Qwen3.6-35B-A3B \
+        --tir-llamacpp-base-urls  http://localhost:8001 http://localhost:8002 http://localhost:8003 http://localhost:8004 http://localhost:8005 http://localhost:8006 \
+        --tir-llamacpp-max-concurrent 3 \
+        --tir-llamacpp-client-timeout 960 \
+        --tir-llamacpp-presence-penalty 0.0 \
+        --tir-llamacpp-tokenizer-path /workspace/tokenizers/Qwen3.5-27B \
+        --formalizations-path logs/prove_nocot_informal_v2_schema_short/formalizations.jsonl \
+        --lean-project-dir /workspace/mathlib4 \
+        --parallelism 18 \
+        --limit-prover-tokens 110000 \
+        --continue \
+        --continue-keep-inconclusive &> prove_formalizations_tir_nocot_llamacpp_informal_v2_short.log'
+screen -S monitor_prove tail -f prove_formalizations_tir_nocot_llamacpp_informal_v2_short.log
+```
+
 ---
 
 ## Goedel Prover V2 (Ollama backend)
