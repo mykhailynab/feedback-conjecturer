@@ -98,8 +98,10 @@ def parse_args() -> argparse.Namespace:
     if args.run2 is None:
         args.run2 = [
             "tir",
-            str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip" / "prove_results.jsonl"),
-            "TIR-Prover Qwen3.6 5bit (no strip)",
+            str(ROOT / "logs" / "short_4x5000" / "prove_results.jsonl"),
+            "Add-Informal",
+            # str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip" / "prove_results.jsonl"),
+            # "TIR-Prover Qwen3.6 5bit (no strip)",
         ]
 
     for run_arg, name in [(args.run1, "--run1"), (args.run2, "--run2")]:
@@ -213,7 +215,7 @@ def main():
     print(f"  Neither:           {n_neither}")
 
     # Plot
-    fig, ax = plt.subplots(figsize=(7, 7))
+    fig, ax = plt.subplots(figsize=(5, 5))
 
     if neither_x and not args.no_neither:
         ax.scatter(neither_x, neither_y, c="grey", alpha=0.4, s=20,
@@ -241,7 +243,7 @@ def main():
 
     ax.set_xlabel(f"Proof tokens — {r1_title}")
     ax.set_ylabel(f"Proof tokens — {r2_title}")
-    subtitle = "by attempt" if args.aggregate_by_attempts else "per problem, best retry"
+    subtitle = "by attempt" if args.aggregate_by_attempts else "per problem, best"
     ax.set_title(f"Proof token count comparison ({subtitle})")
     ax.legend(fontsize=8)
     ax.set_aspect("equal")

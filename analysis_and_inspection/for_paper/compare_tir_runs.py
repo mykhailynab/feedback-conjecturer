@@ -822,7 +822,7 @@ All runs use Qwen3.6-35B-A3B (6-bit) with temperature 0.6, top-p 0.95.}
 \small
 \begin{tabular}{l """ + " ".join(["r"] * n_runs) + r"""}
 \toprule""")
-    parts.append(" & ".join([""] + [_latex_escape(l) for l in labels]) + r" \\")
+    parts.append(" & ".join(["\\textbf{Run Name}"] + [_latex_escape(l) for l in labels]) + r" \\")
     parts.append(r"\midrule")
 
     # Configuration
@@ -832,7 +832,7 @@ All runs use Qwen3.6-35B-A3B (6-bit) with temperature 0.6, top-p 0.95.}
         for rs in all_runs
     ]))
     parts.append(_row(r"\quad Informal proof", [
-        "yes" if "informal" in rs.label.lower() else "no"
+        "yes" if ("informal" in rs.label.lower() or "infr" in rs.label.lower()) else "no"
         for rs in all_runs
     ]))
     parts.append(r"\midrule")
@@ -961,7 +961,7 @@ Configuration & Unique problems & Problem IDs \\
 
     # ── Table: Effect of CoT stripping (strip vs no-strip) ──
     strip_runs = [rs for rs in all_runs if "strip" in rs.label.lower() and "no-strip" not in rs.label.lower()
-                  and "informal" not in rs.label.lower()]
+                  and "informal" not in rs.label.lower() and "infr" not in rs.label.lower()]
     no_strip_runs = [rs for rs in all_runs if "no-strip" in rs.label.lower()]
     if strip_runs and no_strip_runs:
         sr, nsr = strip_runs[0], no_strip_runs[0]
@@ -1012,7 +1012,7 @@ Metric & Strip & No-strip & $\Delta$ \\
         parts.append(r"\end{table}")
 
     # ── Table: Effect of informal proof (strip vs strip+informal) ──
-    informal_runs = [rs for rs in all_runs if "informal" in rs.label.lower()]
+    informal_runs = [rs for rs in all_runs if ("informal" in rs.label.lower() or "infr" in rs.label.lower())]
     if strip_runs and informal_runs:
         sr = strip_runs[0]
         sr_pk = compute_pass_at_k(sr)
@@ -1141,10 +1141,10 @@ def parse_args() -> argparse.Namespace:
 
     if args.run is None:
         args.run = [
-            [str(ROOT / "logs" / "full_20mins_tir_pass1_strip"), "TIR strip", "v1"],
-            [str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip"), "TIR no-strip", "v1"],
-            [str(ROOT / "logs" / "short_6x4090"), "TIR strip+informal 6xGPU", "v2"],
-            [str(ROOT / "logs" / "short_4x5000"), "TIR strip+informal 4xGPU", "v2"],
+            [str(ROOT / "logs" / "full_20mins_tir_pass1_strip"), "Strip", "v1"],
+            [str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip"), "no-Strip", "v1"],
+            # [str(ROOT / "logs" / "short_6x4090"), "Strip+Infr 6xGPU", "v2"],
+            [str(ROOT / "logs" / "short_4x5000"), "Strip+Infr 4xGPU", "v2"],
         ]
 
     for run_arg in args.run:

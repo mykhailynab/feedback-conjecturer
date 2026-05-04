@@ -106,6 +106,8 @@ def main():
         "--tir-tokenizer", type=str,
         default=str(ROOT / "tokenizers" / "Qwen3.6-35B-A3B"),
     )
+    p.add_argument("--v1", action="store_true")
+    p.add_argument('--max-tokens', type=int, default=32768)
     args = p.parse_args()
     args.prove_results_path = Path(args.prove_results_path)
 
@@ -186,31 +188,39 @@ def main():
                 n_zero_turns += 1
                 zero_turns_term_reason_counts[term_reason] += 1
 
-            session_result = proof_result['session_result']
-            conversation_history = session_result['conversation_history']
-            has_partial_assistant_turn = session_result['partial_assistant_turn'] is not None
-            if has_partial_assistant_turn:
-                n_has_partial_assistant_turn += 1
-                has_partial_assistant_turn_term_reason_counts[term_reason] += 1
+            if not args.v1:
+                session_result = proof_result['session_result']
+                conversation_history = session_result['conversation_history']
+                has_partial_assistant_turn = session_result['partial_assistant_turn'] is not None
+                if has_partial_assistant_turn:
+                    n_has_partial_assistant_turn += 1
+                    has_partial_assistant_turn_term_reason_counts[term_reason] += 1
 
         if term_reason == "no_tokens":
-            session = proof_result.get("session_result") or {}
-            last_msg = session.get('partial_assistant_turn') or {}
-            if last_msg is not None:
-                no_tokens_had_partial_assistant_turn += 1
+            if not args.v1:
+                session = proof_result.get("session_result") or {}
+                last_msg = session.get('partial_assistant_turn') or {}
+                if last_msg is not None:
+                    no_tokens_had_partial_assistant_turn += 1
+                else:
+                    conversation_history = session.get("conversation_history")
+                    for msg in reversed(conversation_history):
+                        if msg.get("role") == "assistant":
+                            last_msg = msg
+                if not last_msg:
+                    assert len(conversation_history) == 2
+                    assert [c['role'] for c in conversation_history] == ["system", "user"]
+                    no_tokens_no_assistant += 1
+                last_thinking = (
+                    last_msg.get("reasoning_content", "")
+                    or ""
+                ) if last_msg else ""
             else:
-                conversation_history = session.get("conversation_history")
-                for msg in reversed(conversation_history):
-                    if msg.get("role") == "assistant":
-                        last_msg = msg
-            if not last_msg:
-                assert len(conversation_history) == 2
-                assert [c['role'] for c in conversation_history] == ["system", "user"]
-                no_tokens_no_assistant += 1
-            last_thinking = (
-                last_msg.get("reasoning_content", "")
-                or ""
-            ) if last_msg else ""
+                last_msg = _get_last_assistant_msg(proof_result)
+                last_thinking = (
+                    last_msg.get("reasoning_content", last_msg.get("thinking", ""))
+                    or ""
+                ) if last_msg else ""
             if last_thinking.endswith("</tool_call>"):
                 if not last_msg.get('tool_calls'):
                     unparsed_tool_call_count += 1
@@ -222,7 +232,7 @@ def main():
                         if parsed_tcs:
                             thinking_tc_parsed_count += 1
                             thinking_tc_parsed_total += len(parsed_tcs)
-            elif last_thinking and len(tir_tok.encode(last_thinking)) > (32768 - 1024):  # include buffer
+            elif last_thinking and len(tir_tok.encode(last_thinking)) > (args.max_tokens - 1024):  # include buffer
                 no_tokens_limited_count += 1
             else:
                 no_tokens_other_reasons += 1
@@ -273,9 +283,10 @@ def main():
     print(f"status_counts = {dict(status_counts)}")
     print(f"skip_reason_counts = {dict(skip_reason_counts)}")
     print()
-    print(f"{n_has_partial_assistant_turn} / {total_attempts} had partial assistant turns")
-    print(f"  has_partial_assistant_turn_term_reason_counts = {dict(has_partial_assistant_turn_term_reason_counts)}")
-    print()
+    if not args.v1:
+        print(f"{n_has_partial_assistant_turn} / {total_attempts} had partial assistant turns")
+        print(f"  has_partial_assistant_turn_term_reason_counts = {dict(has_partial_assistant_turn_term_reason_counts)}")
+        print()
 
     # raise SystemExit(0) 
     # NOTE: tir_session_tokens does not work properly for V1

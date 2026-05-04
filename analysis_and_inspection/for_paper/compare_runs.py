@@ -34,6 +34,7 @@ from analysis_and_inspection.for_paper.tokenize_utils import (
     goedel_session_tokens,
     load_proved_status,
     tir_session_tokens,
+    load_skipped_status,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,8 +96,10 @@ def parse_args() -> argparse.Namespace:
     if args.run2 is None:
         args.run2 = [
             "tir",
-            str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip" / "prove_results.jsonl"),
-            "TIR-Prover Qwen3.6 5bit (no strip)",
+            str(ROOT / "logs" / "short_4x5000" / "prove_results.jsonl"),
+            "Add-Informal",
+            # str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip" / "prove_results.jsonl"),
+            # "TIR-Prover Qwen3.6 5bit (no strip)",
         ]
 
     for run_arg, name in [(args.run1, "--run1"), (args.run2, "--run2")]:
@@ -117,6 +120,23 @@ def main():
     print("Loading proved status...")
     r1_proved = load_proved_status(r1_path)
     r2_proved = load_proved_status(r2_path)
+
+    r1_skipped = load_skipped_status(r1_path)
+    r2_skipped = load_skipped_status(r2_path)
+
+    # print(('LbHTOc', 2) in r1_proved)
+    # print(('LbHTOc', 3) in r1_proved)
+    # print(('HnuZJD', 0) in r1_proved)
+    # print(('LbHTOc', 2) in r2_proved)
+    # print(('LbHTOc', 3) in r2_proved)
+    # print(('HnuZJD', 0) in r2_proved)
+    # print(r1_skipped[('LbHTOc', 2)])
+    # print(r1_skipped[('LbHTOc', 3)])
+    # print(r1_skipped[('HnuZJD', 0)])
+    # print(r2_skipped[('LbHTOc', 2)])
+    # print(r2_skipped[('LbHTOc', 3)])
+    # print(r2_skipped[('HnuZJD', 0)])
+    # raise SystemExit(0)
 
     r1_pids = {pid for pid, _ in r1_proved}
     r2_pids = {pid for pid, _ in r2_proved}
@@ -142,8 +162,8 @@ def main():
             print(f"  --no-neither: {len(shared_pids) - len(relevant_pids)} neither-solved problems skipped")
         else:
             relevant_pids = shared_pids
-        r1_keys = {k for k in r1_proved if k[0] in relevant_pids}
-        r2_keys = {k for k in r2_proved if k[0] in relevant_pids}
+        r1_keys = {k for k in r1_proved if k[0] in relevant_pids and not r1_skipped[k]}
+        r2_keys = {k for k in r2_proved if k[0] in relevant_pids and not r2_skipped[k]}
 
     # Load tokenizers (only those needed)
     need_goedel = r1_type == "goedel" or r2_type == "goedel"
@@ -164,6 +184,15 @@ def main():
 
     print(f"Tokenizing run 2 ({r2_title}, {len(r2_keys)} attempts)...")
     r2_tokens = compute_tokens(r2_type, r2_path, get_tokenizer(r2_type), keys=r2_keys)
+
+    # min_toks = min(r1_tokens.values())
+    # print(f"1 {min_toks = }")
+    # min_toks = min(r2_tokens.values())
+    # print(f"2 {min_toks = }")
+    # for k, v in r2_tokens.items():
+    #     if v == 0:
+    #         print(k, v)
+    # raise SystemExit(0)
 
     # Classify and collect scatter data
     both_x, both_y = [], []
@@ -211,7 +240,7 @@ def main():
     print(f"  Neither:           {n_neither}")
 
     # Plot
-    fig, ax = plt.subplots(figsize=(7, 7))
+    fig, ax = plt.subplots(figsize=(5, 5))
 
     if neither_x and not args.no_neither:
         ax.scatter(neither_x, neither_y, c="grey", alpha=0.4, s=20,
@@ -241,6 +270,8 @@ def main():
     ax.set_ylabel(f"Tokens — {r2_title}")
     subtitle = "by attempt" if args.aggregate_by_attempts else "per problem, best retry"
     ax.set_title(f"Token usage comparison ({subtitle})")
+    ax.hlines(16384, xmin=lo, xmax=hi, linestyle="--", color="blue", label="TIR Turn limit")
+    ax.vlines(40960, ymin=lo, ymax=hi, linestyle="--", color="red", label="Goedel Context limit")
     ax.legend(fontsize=8)
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)

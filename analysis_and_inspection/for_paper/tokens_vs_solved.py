@@ -114,11 +114,15 @@ def parse_args() -> argparse.Namespace:
             # ],
             [
                 str(ROOT / "logs" / "full_20mins_tir_pass1_strip" / "prove_results.jsonl"),
-                "TIR-Prover Qwen3.6 5bit (strip)",
+                "Base",
             ],
             [
                 str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip" / "prove_results.jsonl"),
-                "TIR-Prover Qwen3.6 5bit (no strip)",
+                "Keep-CoT",
+            ],
+            [
+                str(ROOT / "logs" / "short_4x5000" / "prove_results.jsonl"),
+                "Add-Informal",
             ],
         ]
 

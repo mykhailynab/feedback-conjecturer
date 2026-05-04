@@ -60,6 +60,32 @@ def _get_best_proof_result(d: dict) -> dict | None:
         return all_pr[-1]
     return d.get("proof_result")
 
+# hotfix
+problem_statement_by_id = {
+    json.loads(line)["problem_id"]: (
+        (json.loads(line).get("lean_statement_without_comment") or "") +
+        (json.loads(line).get("final_abbrev_declaration") or "")
+    )
+    for line in open("logs/conjecture_formalization_logs_20mins/formalizations.jsonl", "r").readlines()
+}
+
+def get_mock_system_and_user(pid):
+    from conjecturing_agents.agents.tir_prover.prompts import (
+        DEFAULT_TIR_PROVER_SYSTEM_PROMPT,
+        DEFAULT_TIR_PROVER_LEAN_TOOL_DESCRIPTION,
+        DEFAULT_TIR_PROVER_LEAN_FINAL_TOOL_DESCRIPTION,
+        DEFAULT_TIR_PROVER_PYTHON_TOOL_DESCRIPTION,
+        INITIAL_USER_MESSAGE
+    )
+    return (
+        DEFAULT_TIR_PROVER_SYSTEM_PROMPT +
+        DEFAULT_TIR_PROVER_LEAN_TOOL_DESCRIPTION +
+        DEFAULT_TIR_PROVER_LEAN_FINAL_TOOL_DESCRIPTION +
+        DEFAULT_TIR_PROVER_PYTHON_TOOL_DESCRIPTION +
+        INITIAL_USER_MESSAGE.format(
+            theorem_statement=problem_statement_by_id[pid]
+        )
+    )
 
 def tir_session_tokens(
     results_path: Path,
@@ -82,6 +108,15 @@ def tir_session_tokens(
                 continue
             d = json.loads(line)
             pid, att = d["problem_id"], d["attempt"]
+            # if (pid, att) == ('LbHTOc', 2):
+            #     print(d)
+            #     print("==================")
+            # if (pid, att) == ('LbHTOc', 3):
+            #     print(d)
+            #     print("==================")
+            # if (pid, att) == ('HnuZJD', 0):
+            #     print(d)
+            #     print("==================")
             if keys is not None and (pid, att) not in keys:
                 continue
             p.update(1)
@@ -93,7 +128,7 @@ def tir_session_tokens(
             # v2: conversation_history inside session_result
             session = pr.get("session_result") or {}
             history = session.get("conversation_history")
-            if session['partial_assistant_turn']:
+            if session.get('partial_assistant_turn'):
                 history += [session['partial_assistant_turn']]
             if history:
                 msgs = list(history)
@@ -113,7 +148,8 @@ def tir_session_tokens(
                 result[(pid, att)] = 0
                 continue
             # NOTE: V1 schema hack — no system/user messages available
-            parts = [d.get("proved_lean", "") or ""]
+            parts = [get_mock_system_and_user(pid)]
+            parts.append(d.get("proved_lean", "") or "")
             for t in turns:
                 parts.append(t.get("thinking", "") or "")
                 parts.append(t.get("content", "") or "")
@@ -240,6 +276,26 @@ def load_proved_status(path: Path) -> dict[tuple[str, int], bool]:
                 continue
             d = json.loads(line)
             results[(d["problem_id"], d["attempt"])] = bool(d.get("proved"))
+            # pid, att = (d["problem_id"], d["attempt"])
+            # if (pid, att) == ('LbHTOc', 2):
+            #     print(d)
+            #     print("==================")
+            # if (pid, att) == ('LbHTOc', 3):
+            #     print(d)
+            #     print("==================")
+            # if (pid, att) == ('HnuZJD', 0):
+            #     print(d)
+            #     print("==================")
+    return results
+
+def load_skipped_status(path: Path) -> dict[tuple[str, int], bool]:
+    results = {}
+    with path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            results[(d["problem_id"], d["attempt"])] = d.get("status") == 'skipped' or d.get("conjecture_formalization_status") == 'skipped'
     return results
 
 
