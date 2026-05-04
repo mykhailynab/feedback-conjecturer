@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from conjecturing_agents.agents.conjecture_formalizer import (
     extract_abbrev_name_from_statement,
+)
+from conjecturing_agents.lean_regex import (
     extract_ground_truth_comment_and_strip_line,
     replace_abbrev_in_statement,
 )
