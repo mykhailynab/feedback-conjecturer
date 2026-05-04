@@ -1,6 +1,6 @@
 # Efficient Conjecturing in Neural ATPs
 
-A agentic pipeline that performs end-to-end automated theorem proving: informal conjecturing, conjecture formalization into Lean 4, and formal proof search. Evaluated on the no-answer split of PutnamBench (343 problems).
+An agentic pipeline that performs end-to-end automated theorem proving: informal conjecturing, conjecture formalization into Lean 4, and formal proof search. Evaluated on the no-answer split of PutnamBench (343 problems).
 
 **Status**: Work-in-progress. Core functionality is kept for reproducibility with the thesis, but new features may be added as part of future work.
 
