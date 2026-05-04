@@ -84,6 +84,8 @@ python -m analysis_and_inspection.inspect_prove_formalizations \
   --results logs/.../prove_results.jsonl
 ```
 
+**Note:** Although the command signature may change with time, the behaviour is kept faithful to the thesis.
+
 ## Key results
 
 - 27 no-answer PutnamBench problems proved end-to-end (state-of-the-art on no-answer split)
