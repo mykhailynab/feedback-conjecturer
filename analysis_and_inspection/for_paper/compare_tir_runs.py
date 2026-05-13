@@ -500,9 +500,9 @@ def compute_overlap(runs: list[RunStats]) -> tuple[dict, dict[str, set[str]]]:
 def _fmt_ms(ms: int | float) -> str:
     s = ms / 1000
     if s < 60:
-        return f"{s:.1f}s"
+        return f"{s:.2f}s"
     m = s / 60
-    return f"{m:.1f}min"
+    return f"{m:.2f}min"
 
 
 def _safe_stats(vals: list[int | float]) -> dict:
@@ -549,7 +549,7 @@ def render_text_report(all_runs: list[RunStats]) -> str:
         lines.append("── Termination reasons ──")
         for reason, count in sorted(rs.termination_reasons.items(), key=lambda x: -x[1]):
             pct = count / max(rs.n_proof_attempts, 1) * 100
-            lines.append(f"  {reason:<35} {count:>5}  ({pct:.1f}%)")
+            lines.append(f"  {reason:<35} {count:>5}  ({pct:.2f}%)")
 
         lines.append("")
         lines.append("── Tool usage ──")
@@ -559,7 +559,7 @@ def render_text_report(all_runs: list[RunStats]) -> str:
         total_tool = rs.total_lean_calls + rs.total_lean_final_calls + rs.total_python_calls
         lines.append(f"  Total tool calls:               {total_tool}")
         lines.append(f"  Lean errors (heuristic):        {rs.total_lean_errors}"
-                      + (f"  ({rs.total_lean_errors/max(rs.total_lean_calls+rs.total_lean_final_calls,1):.1%} of lean calls)"
+                      + (f"  ({rs.total_lean_errors/max(rs.total_lean_calls+rs.total_lean_final_calls,1):.2%} of lean calls)"
                          if rs.total_lean_calls + rs.total_lean_final_calls > 0 else ""))
         if rs.n_proof_attempts:
             lines.append(f"  Tool calls per proof attempt:   {total_tool/rs.n_proof_attempts:.2f}")
@@ -615,7 +615,7 @@ def render_text_report(all_runs: list[RunStats]) -> str:
             lines.append(f"  total={_fmt_ms(gt['sum'])}")
             if gt["sum"] > 0 and rs.output_tokens_list:
                 tok_per_s = sum(rs.output_tokens_list) / (gt["sum"] / 1000)
-                lines.append(f"  Throughput: {tok_per_s:.1f} tok/s")
+                lines.append(f"  Throughput: {tok_per_s:.2f} tok/s")
 
         lines.append("")
         lines.append("── Token limit & exceptions ──")
@@ -629,8 +629,8 @@ def render_text_report(all_runs: list[RunStats]) -> str:
         lines.append(f"  Universe: {pk['n_total_attempts']} attempts across {pk['n_problems']} problems, k={pk['k']}")
         lines.append(f"  pass@1 lower (proved):          {pk['p1_lo']:.2%}  ({pk['n_proved']}/{pk['n_total_attempts']})")
         lines.append(f"  pass@1 upper (1-disproved):     {pk['p1_hi']:.2%}")
-        lines.append(f"  pass@{pk['k']} lower:               {pk['pk_lo']:.2%}  (~{pk['pk_lo']*pk['n_problems']:.1f}/{pk['n_problems']} problems)")
-        lines.append(f"  pass@{pk['k']} upper:               {pk['pk_hi']:.2%}  (~{pk['pk_hi']*pk['n_problems']:.1f}/{pk['n_problems']} problems)")
+        lines.append(f"  pass@{pk['k']} lower:               {pk['pk_lo']:.2%}  (~{pk['pk_lo']*pk['n_problems']:.2f}/{pk['n_problems']} problems)")
+        lines.append(f"  pass@{pk['k']} upper:               {pk['pk_hi']:.2%}  (~{pk['pk_hi']*pk['n_problems']:.2f}/{pk['n_problems']} problems)")
         lines.append(f"  Problems w/ ≥1 proof:           {pk['n_problems_proved']}/{pk['n_problems']}")
 
         lines.append("")
@@ -722,14 +722,14 @@ def render_latex_tables(all_runs: list[RunStats]) -> str:
     total_tools = [rs.total_lean_calls + rs.total_lean_final_calls + rs.total_python_calls for rs in all_runs]
     parts.append(_row(r"\quad Total tool calls", [f"{t:,}" for t in total_tools]))
     parts.append(_row(r"\quad Lean error rate",
-        [f"{rs.total_lean_errors/max(rs.total_lean_calls+rs.total_lean_final_calls,1):.1%}" for rs in all_runs]))
+        [f"{rs.total_lean_errors/max(rs.total_lean_calls+rs.total_lean_final_calls,1):.2%}" for rs in all_runs]))
     parts.append(r"\midrule")
 
     parts.append(r"\multicolumn{" + str(n_runs + 1) + r"}{l}{\textit{Turns per session}} \\")
     for stat_name, stat_fn in [("min", min), ("mean", statistics.mean), ("median", statistics.median), ("max", max)]:
         parts.append(_row(
             rf"\quad {stat_name}",
-            [f"{stat_fn(rs.turns_per_session):.1f}" if rs.turns_per_session else "---" for rs in all_runs],
+            [f"{stat_fn(rs.turns_per_session):.2f}" if rs.turns_per_session else "---" for rs in all_runs],
         ))
     parts.append(r"\midrule")
 
@@ -770,27 +770,27 @@ def render_latex_tables(all_runs: list[RunStats]) -> str:
         return _row(name, [_fmt_s(statistics.mean(v)) if v else "---" for v in vals_lists])
 
     def _fmt_s(ms: float) -> str:
-        return f"{ms/1000:.1f}"
+        return f"{ms/1000:.2f}"
 
     parts.append(r"\multicolumn{" + str(n_runs + 1) + r"}{l}{\textit{All sessions}} \\")
     for stat_name, stat_fn in [("min", min), ("mean", statistics.mean), ("median", statistics.median), ("max", max)]:
         parts.append(_row(
             rf"\quad {stat_name}",
-            [f"{stat_fn(rs.elapsed_ms_list)/1000:.1f}" if rs.elapsed_ms_list else "---" for rs in all_runs],
+            [f"{stat_fn(rs.elapsed_ms_list)/1000:.2f}" if rs.elapsed_ms_list else "---" for rs in all_runs],
         ))
     parts.append(r"\midrule")
     parts.append(r"\multicolumn{" + str(n_runs + 1) + r"}{l}{\textit{Proved sessions}} \\")
     for stat_name, stat_fn in [("min", min), ("mean", statistics.mean), ("median", statistics.median), ("max", max)]:
         parts.append(_row(
             rf"\quad {stat_name}",
-            [f"{stat_fn(rs.elapsed_ms_proved)/1000:.1f}" if rs.elapsed_ms_proved else "---" for rs in all_runs],
+            [f"{stat_fn(rs.elapsed_ms_proved)/1000:.2f}" if rs.elapsed_ms_proved else "---" for rs in all_runs],
         ))
     parts.append(r"\midrule")
     parts.append(r"\multicolumn{" + str(n_runs + 1) + r"}{l}{\textit{Failed sessions}} \\")
     for stat_name, stat_fn in [("min", min), ("mean", statistics.mean), ("median", statistics.median), ("max", max)]:
         parts.append(_row(
             rf"\quad {stat_name}",
-            [f"{stat_fn(rs.elapsed_ms_failed)/1000:.1f}" if rs.elapsed_ms_failed else "---" for rs in all_runs],
+            [f"{stat_fn(rs.elapsed_ms_failed)/1000:.2f}" if rs.elapsed_ms_failed else "---" for rs in all_runs],
         ))
 
     parts.append(r"\bottomrule")
@@ -840,7 +840,7 @@ All runs use Qwen3.6-35B-A3B (6-bit) with temperature 0.6, top-p 0.95.}
     # Accuracy
     parts.append(r"\multicolumn{" + str(n_runs + 1) + r"}{l}{\textit{Accuracy}} \\")
     parts.append(_row(r"\quad Attempts proved",
-        [f"{rs.n_proved}/{rs.n_success} ({rs.n_proved/max(rs.n_success,1):.1%})".replace("%", "\\%") for rs in all_runs]))
+        [f"{rs.n_proved}/{rs.n_success} ({rs.n_proved/max(rs.n_success,1):.2%})".replace("%", "\\%") for rs in all_runs]))
     parts.append(_row(r"\quad Problems proved (pass@$k$)",
         [f"{pk['n_problems_proved']}/{pk['n_problems']}" for pk in pks]))
     parts.append(_row(r"\quad pass@1",
@@ -852,16 +852,16 @@ All runs use Qwen3.6-35B-A3B (6-bit) with temperature 0.6, top-p 0.95.}
     # Session behaviour
     parts.append(r"\multicolumn{" + str(n_runs + 1) + r"}{l}{\textit{Session behaviour}} \\")
     parts.append(_row(r"\quad Mean turns / session",
-        [f"{statistics.mean(rs.turns_per_session):.1f}" if rs.turns_per_session else "---" for rs in all_runs]))
+        [f"{statistics.mean(rs.turns_per_session):.2f}" if rs.turns_per_session else "---" for rs in all_runs]))
     total_tools = [rs.total_lean_calls + rs.total_lean_final_calls + rs.total_python_calls for rs in all_runs]
     parts.append(_row(r"\quad Mean tool calls / session",
-        [f"{t/max(rs.n_proof_attempts,1):.1f}" for t, rs in zip(total_tools, all_runs)]))
+        [f"{t/max(rs.n_proof_attempts,1):.2f}" for t, rs in zip(total_tools, all_runs)]))
     parts.append(_row(r"\quad Lean calls / session",
-        [f"{(rs.total_lean_calls+rs.total_lean_final_calls)/max(rs.n_proof_attempts,1):.1f}" for rs in all_runs]))
+        [f"{(rs.total_lean_calls+rs.total_lean_final_calls)/max(rs.n_proof_attempts,1):.2f}" for rs in all_runs]))
     parts.append(_row(r"\quad Python calls / session",
-        [f"{rs.total_python_calls/max(rs.n_proof_attempts,1):.1f}" for rs in all_runs]))
+        [f"{rs.total_python_calls/max(rs.n_proof_attempts,1):.2f}" for rs in all_runs]))
     parts.append(_row(r"\quad Lean error rate",
-        [f"{rs.total_lean_errors/max(rs.total_lean_calls+rs.total_lean_final_calls,1):.1%}".replace("%", "\\%") for rs in all_runs]))
+        [f"{rs.total_lean_errors/max(rs.total_lean_calls+rs.total_lean_final_calls,1):.2%}".replace("%", "\\%") for rs in all_runs]))
     parts.append(r"\midrule")
 
     # Thinking
@@ -878,7 +878,7 @@ All runs use Qwen3.6-35B-A3B (6-bit) with temperature 0.6, top-p 0.95.}
     )
     for reason in all_reasons:
         counts = [rs.termination_reasons.get(reason, 0) for rs in all_runs]
-        pcts = [f"{c/max(rs.n_proof_attempts,1):.1%}".replace("%", "\\%") for c, rs in zip(counts, all_runs)]
+        pcts = [f"{c/max(rs.n_proof_attempts,1):.2%}".replace("%", "\\%") for c, rs in zip(counts, all_runs)]
         parts.append(_row(
             rf"\quad {_latex_escape(reason)}",
             [f"{c:,} ({p})" for c, p in zip(counts, pcts)],
@@ -994,12 +994,12 @@ Metric & Strip & No-strip & $\Delta$ \\
         parts.append(_delta_row(r"pass@1", sr_pk['p1_lo']*100, nsr_pk['p1_lo']*100, ".2f"))
         parts.append(_delta_row(r"pass@4", sr_pk['pk_lo']*100, nsr_pk['pk_lo']*100, ".2f"))
         parts.append(_delta_row("Mean turns/session",
-            statistics.mean(sr.turns_per_session), statistics.mean(nsr.turns_per_session), ".1f"))
+            statistics.mean(sr.turns_per_session), statistics.mean(nsr.turns_per_session), ".2f"))
         parts.append(_delta_row("Tool calls/session",
-            sr_total_tool/max(sr.n_proof_attempts,1), nsr_total_tool/max(nsr.n_proof_attempts,1), ".1f"))
+            sr_total_tool/max(sr.n_proof_attempts,1), nsr_total_tool/max(nsr.n_proof_attempts,1), ".2f"))
         parts.append(_delta_row(r"Lean error rate (\%)",
             sr.total_lean_errors/max(sr.total_lean_calls+sr.total_lean_final_calls,1)*100,
-            nsr.total_lean_errors/max(nsr.total_lean_calls+nsr.total_lean_final_calls,1)*100, ".1f"))
+            nsr.total_lean_errors/max(nsr.total_lean_calls+nsr.total_lean_final_calls,1)*100, ".2f"))
         parts.append(_delta_row("Mean session time (s)",
             statistics.mean(sr.elapsed_ms_list)/1000 if sr.elapsed_ms_list else 0,
             statistics.mean(nsr.elapsed_ms_list)/1000 if nsr.elapsed_ms_list else 0, ".0f"))
@@ -1056,13 +1056,13 @@ enabled in all cases). Each informal run is compared against the baseline strip-
             [ipk['pk_lo']*100 for ipk in inf_pks], ".2f"))
         parts.append(_multi_delta_row("Mean turns/session",
             statistics.mean(sr.turns_per_session) if sr.turns_per_session else 0,
-            [statistics.mean(irs.turns_per_session) if irs.turns_per_session else 0 for irs in informal_runs], ".1f"))
+            [statistics.mean(irs.turns_per_session) if irs.turns_per_session else 0 for irs in informal_runs], ".2f"))
         parts.append(_multi_delta_row("Lean calls/session",
             (sr.total_lean_calls+sr.total_lean_final_calls)/max(sr.n_proof_attempts,1),
-            [(irs.total_lean_calls+irs.total_lean_final_calls)/max(irs.n_proof_attempts,1) for irs in informal_runs], ".1f"))
+            [(irs.total_lean_calls+irs.total_lean_final_calls)/max(irs.n_proof_attempts,1) for irs in informal_runs], ".2f"))
         parts.append(_multi_delta_row(r"Lean error rate (\%)",
             sr.total_lean_errors/max(sr.total_lean_calls+sr.total_lean_final_calls,1)*100,
-            [irs.total_lean_errors/max(irs.total_lean_calls+irs.total_lean_final_calls,1)*100 for irs in informal_runs], ".1f"))
+            [irs.total_lean_errors/max(irs.total_lean_calls+irs.total_lean_final_calls,1)*100 for irs in informal_runs], ".2f"))
         parts.append(_multi_delta_row("Mean session time (s)",
             statistics.mean(sr.elapsed_ms_list)/1000 if sr.elapsed_ms_list else 0,
             [statistics.mean(irs.elapsed_ms_list)/1000 if irs.elapsed_ms_list else 0 for irs in informal_runs], ".0f"))

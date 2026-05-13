@@ -270,8 +270,8 @@ def main():
     ax.set_ylabel(f"Tokens — {r2_title}")
     subtitle = "by attempt" if args.aggregate_by_attempts else "per problem, best retry"
     ax.set_title(f"Token usage comparison ({subtitle})")
-    ax.hlines(16384, xmin=lo, xmax=hi, linestyle="--", color="blue", label="TIR Turn limit")
-    ax.vlines(40960, ymin=lo, ymax=hi, linestyle="--", color="red", label="Goedel Context limit")
+    ax.hlines(16384, xmin=lo, xmax=hi, linestyle="--", color="blue", label="TIR turn token limit")
+    ax.vlines(40960, ymin=lo, ymax=hi, linestyle="--", color="red", label="Goedel context limit")
     ax.legend(fontsize=8)
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
