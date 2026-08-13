@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -37,7 +38,7 @@ PLOTS = ROOT / "plots"
 PLOTS.mkdir(exist_ok=True)
 
 GOEDEL_COLORS = ["#ED7D31", "#C55A11", "#A04000", "#7F3300"]
-TIR_COLORS = ["#5B9BD5", "#2E75B6", "#1F4E79", "#0D3B66"]
+TIR_COLORS = ["#2CA02C", "#9467BD", "#E377C2", "#17BECF"]
 
 
 def build_curve(
@@ -95,6 +96,11 @@ def parse_args() -> argparse.Namespace:
              "Curve shows problems solved instead of attempts solved.",
     )
     p.add_argument(
+        "--only-verified", action="store_true",
+        help="Only treat attempts listed in each run's verified directory "
+             "(included_attempts.jsonl) as proved.",
+    )
+    p.add_argument(
         "--output", type=str, default=str(PLOTS / "tokens_vs_solved.pdf"),
         help="Output plot path (default: plots/tokens_vs_solved.pdf).",
     )
@@ -106,12 +112,11 @@ def parse_args() -> argparse.Namespace:
             str(ROOT / "logs" / "prove_formalizations_40K_20mins" / "prove_results.jsonl"),
             "Goedel-Prover 8bit",
         ]]
+        args._goedel_verified = [str(ROOT / "data" / "goedel_proofs_equiv")]
+    else:
+        args._goedel_verified = [None] * len(args.goedel)
     if args.tir is None:
         args.tir = [
-            # [
-            #     str(ROOT / "logs" / "stripped_formalizations_goedel_pass_pass4x1_tir_qwen36_strip" / "prove_results.jsonl"),
-            #     "TIR-Prover Qwen3.6 5bit (strip, on Goedel-proved)",
-            # ],
             [
                 str(ROOT / "logs" / "full_20mins_tir_pass1_strip" / "prove_results.jsonl"),
                 "Base",
@@ -125,12 +130,52 @@ def parse_args() -> argparse.Namespace:
                 "Add-Informal",
             ],
         ]
+        args._tir_verified = [
+            str(ROOT / "data" / "base_equiv"),
+            str(ROOT / "data" / "keep_cot_equiv"),
+            str(ROOT / "data" / "tir_prover_equiv"),
+        ]
+    else:
+        args._tir_verified = [None] * len(args.tir)
 
     return args
 
 
+def _load_verified_keys(directory: str) -> set[tuple[str, int]]:
+    """Load (problem_id, attempt) pairs from included_attempts.jsonl."""
+    path = Path(directory) / "included_attempts.jsonl"
+    keys = set()
+    with open(path) as f:
+        for line in f:
+            r = json.loads(line)
+            keys.add((r["problem_id"], r["attempt"]))
+    return keys
+
+
+def _apply_verified_filter(
+    proved: dict[tuple[str, int], bool],
+    verified: set[tuple[str, int]],
+) -> dict[tuple[str, int], bool]:
+    """Override proved status: only keys in verified are True."""
+    return {k: (v and k in verified) for k, v in proved.items()}
+
+
 def main():
     args = parse_args()
+
+    # Load verified sets (one per run, in goedel+tir order)
+    all_verified_dirs = args._goedel_verified + args._tir_verified
+    verified_sets: list[set[tuple[str, int]] | None] = []
+    if args.only_verified:
+        for d in all_verified_dirs:
+            if d is not None:
+                vk = _load_verified_keys(d)
+                verified_sets.append(vk)
+                print(f"Loaded {len(vk)} verified attempts from {d}")
+            else:
+                verified_sets.append(None)
+    else:
+        verified_sets = [None] * len(all_verified_dirs)
 
     goedel_tok = None
     qwen_tok = None
@@ -142,11 +187,21 @@ def main():
         print("Loading TIR tokenizer...")
         qwen_tok = AutoTokenizer.from_pretrained(args.tir_tokenizer)
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    plt.rcParams.update({
+        'font.size': 18,
+        'axes.labelsize': 20,
+        'axes.titlesize': 22,
+        'xtick.labelsize': 18,
+        'ytick.labelsize': 18,
+        'legend.fontsize': 18,
+    })
+    fig, ax = plt.subplots(figsize=(8, 6))
 
     for i, (path_str, title) in enumerate(args.goedel):
         results_path = Path(path_str)
         proved = load_proved_status(results_path)
+        if verified_sets[i] is not None:
+            proved = _apply_verified_filter(proved, verified_sets[i])
         if args.aggregate_problems:
             # Need all attempts for per-problem aggregation
             proved_keys = {k for k, v in proved.items() if v}
@@ -161,14 +216,17 @@ def main():
             xs, ys = build_curve(tokens, proved)
         print(f"  {ys[-1]} proved, max tokens: {max(xs)}")
         color = GOEDEL_COLORS[i % len(GOEDEL_COLORS)]
-        ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=1.5)
-        ax.hlines(y=ys[-1], xmin=xs[-1], xmax=40960, linestyle='--', color=color, linewidth=1.5)
+        ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=3)
+        ax.hlines(y=ys[-1], xmin=xs[-1], xmax=40960, linestyle='--', color=color, linewidth=3)
         ax.scatter([40960], [ys[-1]], color=color)
         ax.scatter(xs, ys, color=color)
 
+    goedel_count = len(args.goedel or [])
     for i, (path_str, title) in enumerate(args.tir):
         results_path = Path(path_str)
         proved = load_proved_status(results_path)
+        if verified_sets[goedel_count + i] is not None:
+            proved = _apply_verified_filter(proved, verified_sets[goedel_count + i])
         if args.aggregate_problems:
             proved_keys = {k for k, v in proved.items() if v}
             print(f"Computing TIR session tokens for '{title}' ({len(proved)} attempts)...")
@@ -182,8 +240,8 @@ def main():
             xs, ys = build_curve(tokens, proved)
         print(f"  {ys[-1]} proved, max tokens: {max(xs)}")
         color = TIR_COLORS[i % len(TIR_COLORS)]
-        ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=1.5)
-        ax.hlines(y=ys[-1], xmin=xs[-1], xmax=262144, linestyle='--', color=color, linewidth=1.5)
+        ax.plot(xs, ys, label=f"{title} (n={ys[-1]})", color=color, linewidth=3)
+        ax.hlines(y=ys[-1], xmin=xs[-1], xmax=262144, linestyle='--', color=color, linewidth=3)
         ax.scatter([262144], [ys[-1]], color=color)
         ax.scatter(xs, ys, color=color)
 

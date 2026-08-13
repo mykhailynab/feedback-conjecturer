@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -85,6 +86,11 @@ def parse_args() -> argparse.Namespace:
         help="One dot per (problem_id, attempt) instead of aggregating retries per problem.",
     )
     p.add_argument(
+        "--only-verified", action="store_true",
+        help="Only treat attempts listed in each run's verified directory "
+             "(included_attempts.jsonl) as proved.",
+    )
+    p.add_argument(
         "--output", type=str, default=str(PLOTS / "compare_proof_lengths.pdf"),
     )
     args = p.parse_args()
@@ -95,6 +101,9 @@ def parse_args() -> argparse.Namespace:
             str(ROOT / "logs" / "prove_formalizations_40K_20mins" / "prove_results.jsonl"),
             "Goedel-Prover 8bit",
         ]
+        args._run1_verified = str(ROOT / "data" / "goedel_proofs_equiv")
+    else:
+        args._run1_verified = None
     if args.run2 is None:
         args.run2 = [
             "tir",
@@ -103,12 +112,34 @@ def parse_args() -> argparse.Namespace:
             # str(ROOT / "logs" / "full_20mins_tir_pass1_no_strip" / "prove_results.jsonl"),
             # "TIR-Prover Qwen3.6 5bit (no strip)",
         ]
+        args._run2_verified = str(ROOT / "data" / "tir_prover_equiv")
+    else:
+        args._run2_verified = None
 
     for run_arg, name in [(args.run1, "--run1"), (args.run2, "--run2")]:
         if run_arg[0] not in ("goedel", "tir"):
             p.error(f"{name} TYPE must be 'goedel' or 'tir', got '{run_arg[0]}'")
 
     return args
+
+
+def _load_verified_keys(directory: str) -> set[tuple[str, int]]:
+    """Load (problem_id, attempt) pairs from included_attempts.jsonl."""
+    path = Path(directory) / "included_attempts.jsonl"
+    keys = set()
+    with open(path) as f:
+        for line in f:
+            r = json.loads(line)
+            keys.add((r["problem_id"], r["attempt"]))
+    return keys
+
+
+def _apply_verified_filter(
+    proved: dict[tuple[str, int], bool],
+    verified: set[tuple[str, int]],
+) -> dict[tuple[str, int], bool]:
+    """Override proved status: only keys in verified are True."""
+    return {k: (v and k in verified) for k, v in proved.items()}
 
 
 def main():
@@ -122,6 +153,16 @@ def main():
     print("Loading proved status...")
     r1_proved = load_proved_status(r1_path)
     r2_proved = load_proved_status(r2_path)
+
+    if args.only_verified:
+        if args._run1_verified:
+            vk = _load_verified_keys(args._run1_verified)
+            r1_proved = _apply_verified_filter(r1_proved, vk)
+            print(f"  Run 1: filtered to {len(vk)} verified attempts from {args._run1_verified}")
+        if args._run2_verified:
+            vk = _load_verified_keys(args._run2_verified)
+            r2_proved = _apply_verified_filter(r2_proved, vk)
+            print(f"  Run 2: filtered to {len(vk)} verified attempts from {args._run2_verified}")
 
     r1_pids = {pid for pid, _ in r1_proved}
     r2_pids = {pid for pid, _ in r2_proved}
@@ -221,14 +262,14 @@ def main():
         ax.scatter(neither_x, neither_y, c="grey", alpha=0.4, s=20,
                    label=f"Neither (n={n_neither})", zorder=1)
     if r1_only_x:
-        ax.scatter(r1_only_x, r1_only_y, c="#9B59B6", alpha=0.7, s=30,
-                   label=f"{r1_title} only (n={n_r1})", zorder=2)
+        ax.scatter(r1_only_x, r1_only_y, c="#9B59B6", alpha=0.7, s=40,
+                   label=f"{r1_title}\nonly (n={n_r1})", zorder=2)
     if r2_only_x:
-        ax.scatter(r2_only_x, r2_only_y, c="#F1C40F", alpha=0.7, s=30,
+        ax.scatter(r2_only_x, r2_only_y, c="#F1C40F", alpha=0.7, s=40,
                    edgecolors="#B7950B", linewidths=0.5,
-                   label=f"{r2_title} only (n={n_r2})", zorder=2)
+                   label=f"{r2_title}\nonly (n={n_r2})", zorder=2)
     if both_x:
-        ax.scatter(both_x, both_y, c="#27AE60", alpha=0.7, s=30,
+        ax.scatter(both_x, both_y, c="#27AE60", alpha=0.7, s=40,
                    label=f"Both solved (n={n_both})", zorder=3)
 
     # Diagonal reference line
@@ -237,18 +278,19 @@ def main():
         all_vals += neither_x + neither_y
     if all_vals:
         lo, hi = 0, max(all_vals) * 1.05
-        ax.plot([lo, hi], [lo, hi], ls="--", c="black", alpha=0.2, linewidth=0.8)
+        ax.plot([lo, hi], [lo, hi], ls="--", c="black", alpha=0.2, linewidth=3)
         ax.set_xlim(lo, hi)
         ax.set_ylim(lo, hi)
 
-    ax.set_xlabel(f"Proof tokens — {r1_title}")
-    ax.set_ylabel(f"Proof tokens — {r2_title}")
+    ax.set_xlabel(f"Proof tokens — {r1_title}", fontsize=13)
+    ax.set_ylabel(f"Proof tokens — {r2_title}", fontsize=13)
     subtitle = "by attempt" if args.aggregate_by_attempts else "per problem, best"
-    ax.set_title(f"Proof token count comparison ({subtitle})")
-    ax.legend(fontsize=8)
+    ax.set_title(f"Proof token count comparison ({subtitle})", fontsize=15)
+    ax.tick_params(axis="both", labelsize=11)
+    ax.legend(fontsize=11, loc="upper left")
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 0.95, 1])
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
