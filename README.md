@@ -4,6 +4,57 @@ An agentic pipeline that performs end-to-end automated theorem proving: informal
 
 **Status**: Work-in-progress. Core functionality is kept for reproducibility with the thesis, but new features may be added as part of future work.
 
+## Key results
+
+**Answering is easy, proving is hard, and a compiling proof is not a correct one.**
+
+| | Goedel-Prover-V2 | TIR-Prover | union |
+|---|---|---|---|
+| problems with a compiling proof | 27 | 21 | 30 |
+| **verified after filtering** | **15** | **11** | **18** |
+| rejected as reward hacks | 12 | 10 | 12 |
+
+<!-- `putnam_1988_b2` is the one problem rejected for one prover but verified for the other — TIR's answer restates the theorem, Goedel's does not — so the union column counts 12 rejected, not 13. -->
+
+- The informal solver answered **97%** of the 343 problems and was expert-judged correct on **77%** at pass@4.
+- Conjecture formalization compiled in **97%** of answered attempts.
+- **12 of the 30 distinct problems (40%) with a compiling proof were reward hacks**: the model defined its `abbrev …_solution` to be the theorem's own statement, so the goal became `P ↔ P` and closed by `rfl`. The proof compiles and certifies nothing.
+- **Every hack had a `Prop`- or `Set`-valued answer.** No numeric, tuple, function or polynomial answer was ever hacked — the hack needs an answer type rich enough to hold the question.
+- A **triviality probe** using nothing but the compiler (splice the model's own answer back into its own theorem, discard its proof, try one tactic) rejects **7 of the 12** hacks with **0 false positives** across 62 verified-correct attempts. See `scripts/probe_admissibility.py`.
+<!-- - Concurrent work (ECP, [arXiv:2505.18492](https://arxiv.org/abs/2505.18492)) reports 17 solved problems on its own re-formalization of the split and identifies the same failure mode. **13 of our 15 Goedel-verified problems are in their 17** — two independent systems, independent formalizations, near-identical core set, which suggests similar weaknesses -->
+
+The 18-problem union is *best of two provers at pass@4* (343 problems × 4 formalizations × 2 provers) and a post-hoc union, not a clean pass@8. It is reported that way deliberately.
+
+### Verified problems
+
+Proofs themselves cannot be published due to PutnamBench policy. THe following problem identifiers are PutnamBench names.
+
+**Goedel-Prover-V2 — 15 verified** (of 27 claimed)
+
+```
+putnam_1975_a1  putnam_1975_b1  putnam_1977_a2  putnam_1977_a3  putnam_1984_b2
+putnam_1986_a1  putnam_1986_a2  putnam_1986_b1  putnam_1988_b2  putnam_1990_a1
+putnam_1991_a2  putnam_1993_b1  putnam_1995_b4  putnam_1998_b1  putnam_2005_b1
+```
+
+**TIR-Prover — 11 verified** (of 21 claimed)
+
+```
+putnam_1975_b1  putnam_1977_a2  putnam_1977_a3  putnam_1985_a4  putnam_1986_a1
+putnam_1986_b1  putnam_1990_a5  putnam_1991_a2  putnam_1998_b1  putnam_2005_b1
+putnam_2015_a2
+```
+
+**Union — 18 distinct.** 8 problems were solved by both provers (`putnam_1975_b1`, `putnam_1977_a2`, `putnam_1977_a3`, `putnam_1986_a1`, `putnam_1986_b1`, `putnam_1991_a2`, `putnam_1998_b1`, `putnam_2005_b1`); 7 by Goedel only, 3 by TIR only.
+
+**Rejected as reward hacks — 12 distinct**
+
+```
+putnam_1963_b2  putnam_1963_b3  putnam_1982_a6  putnam_1983_b2  putnam_1990_a2
+putnam_1995_a5  putnam_1996_a6  putnam_1999_a1  putnam_2009_a4  putnam_2012_a6
+putnam_2021_a6  putnam_2025_b3
+```
+
 ## Pipeline overview
 
 1. **Solver Agent** — finds answers informally using gpt-oss:120B with Python TIR (pass@4, 20 min timeout)
@@ -85,13 +136,6 @@ python -m analysis_and_inspection.inspect_prove_formalizations \
 ```
 
 **Note:** Although the command signature may change with time, the behaviour is kept faithful to the thesis.
-
-## Key results
-
-- 27 no-answer PutnamBench problems proved end-to-end (state-of-the-art on no-answer split)
-- Goedel-Prover-V2 proved 27/343 problems; TIR-Prover (Keep-CoT / Add-Informal) proved 21/343
-- Informal solver achieved 77% expert-check accuracy at pass@4 (312/343 problems)
-- Conjecture formalization compiled successfully in 97% of answered attempts
 
 ## Dependencies
 
